@@ -2,13 +2,19 @@
 //!
 //! # Everything happens because a tick happened
 //!
-//! A plugin has one timer, and the host keeps the last thing it was asked for
-//! rather than a queue of them. So there is exactly one place that asks — see
-//! [`Pirate::arm`] — and the schedule lives in [`Pirate::next_poll_at`] rather
-//! than in the length of the wait. A tick is a heartbeat that asks "is it time
-//! yet"; two timers outstanding would be two heartbeats, then four, and a
-//! plugin that polls Anthropic at an exponentially rising rate is a plugin
-//! that gets an account rate-limited.
+//! A plugin has one timer and cannot take an answer back: the host keeps the
+//! newest thing it was asked for and drops whatever was coming before it. So
+//! there is exactly one place that asks — see [`Pirate::arm`] — and it asks
+//! only when it wants to be woken *sooner* than it already will be. The
+//! schedule itself lives in [`Pirate::next_poll_at`] rather than in the length
+//! of the wait, so a tick is a heartbeat that asks "is it time yet".
+//!
+//! Both halves of that matter. Asking again for the same moment would be a
+//! heartbeat that doubles, then quadruples, and a plugin polling Anthropic at
+//! a rising rate is an account rate-limited. Never asking again is the bug
+//! that shipped first: a click wants the mark redrawn every hundred
+//! milliseconds, and a plugin already waiting a minute for its next poll would
+//! stand still for that minute with a person watching it.
 //!
 //! # The mouth means a person is waiting, and nothing else
 //!
@@ -127,8 +133,12 @@ pub struct Pirate {
     fetching: Option<i32>,
     /// When the next background poll is due, in milliseconds since the epoch.
     next_poll_at: i64,
-    /// Whether a tick is already coming. See the module note: exactly one.
-    ticking: bool,
+    /// When the tick it asked for is due, in milliseconds since the epoch.
+    ///
+    /// The moment rather than a flag, because "is one coming?" is the wrong
+    /// question — "is one coming *soon enough*?" is the one that decides
+    /// whether to ask again. See the module note.
+    waking_at: Option<i64>,
 }
 
 impl Pirate {
@@ -171,7 +181,7 @@ impl Pirate {
 
     /// The wait asked for has passed.
     pub fn tick(&mut self) {
-        self.ticking = false;
+        self.waking_at = None;
 
         if self.busy {
             self.chomp = (self.chomp + 1) % CHOMP_CYCLE.len();
@@ -325,24 +335,28 @@ impl Pirate {
             };
     }
 
-    /// Asks to be ticked, if a tick is not already coming.
+    /// Asks to be ticked, if the tick that is coming is not soon enough.
     ///
-    /// The one place a timer is asked for. See the module note.
+    /// The one place a timer is asked for. See the module note: asking again
+    /// for a moment already booked is a heartbeat that doubles, and never
+    /// asking again is a mark that stands still while somebody watches it.
     fn arm(&mut self) {
-        if self.ticking {
-            return;
-        }
-
+        let now = sys::now();
         let waiting = if self.busy {
             CHOMP_MILLIS
         } else {
             // A second at the shortest, so that a plugin whose schedule has
             // fallen behind catches up rather than spinning.
-            (self.next_poll_at - sys::now()).clamp(1_000, IDLE_POLL_MILLIS)
+            (self.next_poll_at - now).clamp(1_000, IDLE_POLL_MILLIS)
         };
 
+        let waking_at = now + waiting;
+        if self.waking_at.is_some_and(|booked| booked <= waking_at) {
+            return;
+        }
+
         sys::set_timer(waiting as i32);
-        self.ticking = true;
+        self.waking_at = Some(waking_at);
     }
 
     /// Whether an answer is already on its way.

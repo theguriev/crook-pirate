@@ -299,27 +299,61 @@ fn the_bite_comes_back_round_to_a_whole_face() {
 }
 
 #[test]
-fn there_is_never_more_than_one_tick_coming() {
-    // Two timers outstanding would be two heartbeats, then four. This is the
-    // assertion that keeps the poll rate from running away.
+fn a_click_asks_to_be_woken_sooner_and_asks_once() {
+    // The bug that shipped first: a plugin already waiting a minute for its
+    // next poll never asked again, so the mark stood still for that minute
+    // with a person watching it. And the bug on the other side of it: asking
+    // again for a moment already booked is a heartbeat that doubles, then
+    // quadruples, and a plugin polling Anthropic at a rising rate is an
+    // account rate-limited.
     let mut pirate = reading();
 
     pirate.run("refresh");
+    assert_eq!(
+        stub::taken().timers,
+        vec![CHOMP_MILLIS as i32],
+        "a click wants the mark redrawn a frame from now, not a minute from now"
+    );
+
     pirate.run("refresh");
     pirate.run("panel");
-    let asked = stub::taken();
-
     assert!(
-        asked.timers.is_empty(),
-        "a tick was already coming; asking again is asking twice: {:?}",
-        asked.timers
+        stub::taken().timers.is_empty(),
+        "the moment was already booked; asking for it again is asking twice"
     );
 
     pirate.tick();
     assert_eq!(
-        stub::taken().timers.len(),
-        1,
-        "and the tick that arrives asks for exactly one more"
+        stub::taken().timers,
+        vec![CHOMP_MILLIS as i32],
+        "and the tick that arrives books the next frame of the bite"
+    );
+}
+
+#[test]
+fn the_bite_ending_does_not_book_a_second_heartbeat() {
+    // Coming back the other way: the answer lands, the mouth shuts, and the
+    // next poll is a minute off — which is later than the tick already
+    // coming, so nothing is asked for and the tick that arrives is the one
+    // that books the minute.
+    let mut pirate = reading();
+    pirate.run("refresh");
+    let _ = stub::taken();
+
+    let fetch = stub::taken().requests.first().map(|(ticket, _)| *ticket);
+    if let Some(ticket) = fetch {
+        pirate.deliver(
+            ticket,
+            Answer::Fetched {
+                status: 200,
+                body: USAGE.to_vec(),
+            },
+        );
+    }
+
+    assert!(
+        stub::taken().timers.is_empty(),
+        "a wait that is further off than the one already booked is not worth asking for"
     );
 }
 
