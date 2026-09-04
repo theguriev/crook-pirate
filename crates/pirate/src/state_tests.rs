@@ -366,3 +366,27 @@ fn an_answer_nothing_is_waiting_on_changes_nothing() {
 
     assert_eq!(pirate.usable_reading().cloned(), before);
 }
+
+#[test]
+fn building_again_forgets_everything_the_last_life_was_waiting_on() {
+    // The host builds a plugin again when it is switched back on and when a
+    // person answers what it asked to be allowed. Whatever the previous life
+    // was waiting on — a timer nobody will fire again, a ticket nobody will
+    // answer — has to go, or the plugin comes back permanently asleep.
+    let mut pirate = reading();
+    pirate.run("refresh");
+    let _ = stub::taken();
+
+    pirate = Pirate::new();
+    pirate.build();
+
+    let asked = stub::taken();
+    assert_eq!(asked.requests.len(), 1, "it asks again from the beginning");
+    assert_eq!(
+        asked.timers.len(),
+        1,
+        "and asks for a tick, which a plugin still holding a stale one would not"
+    );
+    assert_eq!(pirate.usable_reading(), None);
+    assert_eq!(pirate.mark(), PIRATE);
+}

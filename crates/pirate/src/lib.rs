@@ -149,9 +149,20 @@ pub fn manifest() -> Manifest {
 }
 
 /// Registers the chip and the actions, and starts the first reading.
+///
+/// **From nothing, every time.** A build is not resumed: the host builds a
+/// plugin again when it is switched back on and when a person answers what it
+/// asked to be allowed, and what was left of the previous life is worse than
+/// useless — a timer this plugin is waiting on that nobody will ever fire
+/// again, and a ticket nobody will ever answer. So the state is replaced
+/// rather than reused, which is the same promise the host makes about a plugin
+/// it rebuilds.
 #[unsafe(no_mangle)]
 pub extern "C" fn crook_build() -> i32 {
-    pirate().build();
+    // SAFETY: see `Single::get`.
+    let held = unsafe { PIRATE.get() };
+    *held = Some(Pirate::new());
+    held.get_or_insert_with(Pirate::new).build();
     0
 }
 
