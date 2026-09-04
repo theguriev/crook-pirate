@@ -4,9 +4,24 @@ The Claude Code usage chip for [Crook](https://github.com/theguriev/crook), as a
 terminal does not carry.
 
 A pirate sits at the right-hand end of the header with a percentage beside him: how much of
-the current Claude Code session budget is spent. Click him and a panel drops out with the
-limits behind that number — the rolling five-hour window and the weekly one, each with a bar
-and the time left on it. He chomps while a refresh you asked for is in flight, and only then.
+the current Claude Code session budget is spent.
+
+<img src="assets/chip.png" alt="The pirate and 47% at the right-hand end of Crook's header" width="320">
+
+Click him and a panel drops out with the limits behind that number — the rolling five-hour
+window and the weekly one, each with a bar and the time left on it.
+
+<img src="assets/panel.png" alt="The panel: Session 47%, resets in 3h 29m; Week 62%, resets in 3d 23h; a note saying where the numbers come from; a Refresh button" width="470">
+
+He chomps while a refresh **you asked for** is in flight, and only then — a background poll
+every minute animates nothing, because an animation on a timer nobody is watching repaints
+the header sixty times for no one.
+
+<img src="assets/bite.gif" alt="The pirate's mouth opening and closing while a refresh is in flight" width="320">
+
+The mark is Crook's own artwork, asked for by icon name; what this plugin does is name a
+different frame of the bite on each render and ask to be woken a hundred and ten milliseconds
+later. It cannot draw a pixel of its own.
 
 Crook used to have this in the box. It is here now, outside the binary, and that is the point
 of it: this is what a plugin from outside can do.
