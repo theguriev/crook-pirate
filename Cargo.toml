@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+authors = ["Eugen Guriev <gurievcreative@gmail.com>"]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/theguriev/crook-pirate"
+publish = false
+
+[workspace.dependencies]
+crook_plugin_api = { path = "crates/crook_plugin_api" }
+
+postcard = { version = "1.1", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+serde_json = "1.0"
+
+# The whole point of a store plugin is that it is small: a person downloads it,
+# and a megabyte of formatting code is a megabyte nobody asked for.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,21 @@
+[package]
+name = "crook_plugin_api"
+description = "What a sandboxed Crook plugin and its host say to each other."
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A COPY, not a fork. This file is `crates/crook_plugin_api` from Crook itself,
+# vendored because Crook's own repository is not public and a plugin anybody
+# can build cannot depend on one they cannot clone. `ABI_VERSION` is what keeps
+# the two honest: a copy that has drifted is a plugin the host refuses by
+# number, at load, with a line saying which version each side speaks — rather
+# than one that decodes a shape that means something else now.
+#
+# When Crook publishes this crate, this directory becomes a dependency line.
+
+[dependencies]
+postcard.workspace = true
+serde.workspace = true

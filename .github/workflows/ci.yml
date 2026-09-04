@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain file names the channel, the components and the wasm
+      # target, so there is nothing to pin twice.
+      - name: Install the toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Everything but `sys.rs` builds for the host, which is what makes the
+      # whole plugin testable without a terminal to install it into.
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build the plugin
+        run: |
+          cargo build --release --target wasm32-unknown-unknown
+          cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
+          ls -l plugin.wasm
+
+      # So that a reviewer can see what a release will contain before it is one.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin.wasm
+          path: plugin.wasm
+
+  release:
+    name: Release
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+
+      # Built here rather than downloaded from the job above, so that what a
+      # person installs is a file this workflow compiled from this tag's
+      # source and nothing else has touched.
+      - name: Build the plugin
+        run: |
+          cargo build --release --target wasm32-unknown-unknown
+          cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
+          sha256sum plugin.wasm > plugin.wasm.sha256
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            plugin.wasm
+            plugin.wasm.sha256
+          generate_release_notes: true

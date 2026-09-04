@@ -1,0 +1,21 @@
+[package]
+name = "pirate"
+description = "The Claude Code usage chip, as a plugin Crook does not carry."
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# `cdylib` is the plugin; `rlib` is so that `cargo test` can link the same code
+# against the host's target and run everything that is not an import.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crook_plugin_api.workspace = true
+serde.workspace = true
+# The two things Claude answers with are JSON: the credentials file Claude Code
+# writes and the usage endpoint's reply. A sandboxed plugin parses them itself
+# — the host hands over bytes and has no idea what they mean.
+serde_json.workspace = true
