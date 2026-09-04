@@ -32,6 +32,7 @@
 use crook_plugin_api::{Answer, Method, Request};
 
 use crate::claude::{self, CREDENTIALS_PATH, OAUTH_BETA, Reading, Session, USAGE_URL};
+use crate::history::{self, Week};
 use crate::sys::{self, Level};
 
 /// How often the reading is refreshed while there is a session to read it
@@ -48,6 +49,27 @@ pub const IDLE_POLL_MILLIS: i64 = 10 * 60_000;
 
 /// How long one frame of the bite is held.
 pub const CHOMP_MILLIS: i64 = 110;
+
+/// How long a week read stays fresh.
+///
+/// A minute, matching the poll: the transcripts are read when the panel opens,
+/// and opening it twice inside a minute should not walk three hundred
+/// megabytes twice for a chart that cannot have changed enough to see.
+pub const WEEK_FRESH_FOR: i64 = 60_000;
+
+/// How long to wait for an answer before deciding one is not coming.
+///
+/// Nothing in the ABI promises an answer. The host takes a request, does the
+/// work somewhere else and delivers it later — and "later" is a word with no
+/// upper bound in it: the host can fail to hand it over, decide the plugin has
+/// asked for too much, or be restarted underneath. A plugin that waited on a
+/// ticket forever would then be a chip drawing a number from an hour ago,
+/// looking exactly as current as one drawn a second ago, and no click would
+/// wake it because a cycle is already "in flight".
+///
+/// Three poll intervals, because a request that is genuinely slow is slow in
+/// seconds and this must not race one that is merely on a bad network.
+pub const GIVE_UP_WAITING_AFTER: i64 = 3 * POLL_MILLIS;
 
 /// The bite, in the host's own icon names, ending where it starts so that
 /// stopping on any frame boundary stops on a whole face.
@@ -119,6 +141,13 @@ pub struct Pirate {
     session: Option<Session>,
     /// The last reading that arrived, however old.
     reading: Option<Reading>,
+    /// The week behind it, once the transcripts have been read.
+    week: Option<Week>,
+    /// When they were last read, so opening the panel twice does not walk them
+    /// twice. See [`WEEK_FRESH_FOR`].
+    week_read_at: Option<i64>,
+    /// The scan in flight, which is several pages long.
+    scanning: Option<history::Reading>,
     /// What went wrong on the last cycle, if anything.
     problem: Option<Problem>,
     /// Whether the panel is up. The plugin's state, not the host's.
@@ -133,6 +162,10 @@ pub struct Pirate {
     fetching: Option<i32>,
     /// When the next background poll is due, in milliseconds since the epoch.
     next_poll_at: i64,
+    /// When the cycle in flight asked for what it is waiting on.
+    ///
+    /// The watchdog's whole state. See [`GIVE_UP_WAITING_AFTER`].
+    waiting_since: Option<i64>,
     /// When the tick it asked for is due, in milliseconds since the epoch.
     ///
     /// The moment rather than a flag, because "is one coming?" is the wrong
@@ -171,6 +204,7 @@ impl Pirate {
                 // the chip again to put the panel away.
                 if self.panel_open {
                     self.refresh(true);
+                    self.read_the_week();
                 }
             }
             "dismiss" => self.panel_open = false,
@@ -182,6 +216,7 @@ impl Pirate {
     /// The wait asked for has passed.
     pub fn tick(&mut self) {
         self.waking_at = None;
+        self.give_up_waiting();
 
         if self.busy {
             self.chomp = (self.chomp + 1) % CHOMP_CYCLE.len();
@@ -193,8 +228,36 @@ impl Pirate {
         self.arm();
     }
 
+    /// Starts reading the transcripts, unless that was done a moment ago.
+    ///
+    /// Only ever from the panel, because it is the only thing that draws the
+    /// week: walking three hundred megabytes for a chart nobody has opened
+    /// would be the plugin spending somebody's disk on nothing.
+    fn read_the_week(&mut self) {
+        if self.scanning.is_some() {
+            return;
+        }
+        if self
+            .week_read_at
+            .is_some_and(|at| sys::now() - at < WEEK_FRESH_FOR)
+        {
+            return;
+        }
+        self.scanning = Some(history::Reading::start());
+    }
+
     /// An answer to something asked for.
     pub fn deliver(&mut self, ticket: i32, answer: Answer) {
+        if self
+            .scanning
+            .as_ref()
+            .is_some_and(|scan| scan.is_waiting_on(ticket))
+        {
+            self.take_a_page(answer);
+            self.arm();
+            return;
+        }
+
         if Some(ticket) == self.reading_credentials {
             self.reading_credentials = None;
             self.take_credentials(answer);
@@ -215,6 +278,32 @@ impl Pirate {
         self.arm();
     }
 
+    /// One page of the transcripts.
+    fn take_a_page(&mut self, answer: Answer) {
+        let Some(scan) = self.scanning.as_mut() else {
+            return;
+        };
+
+        match answer {
+            Answer::Counted { tables, .. } => {
+                self.week = Some(scan.take(tables));
+                self.week_read_at = Some(sys::now());
+                self.scanning = None;
+            }
+            // Refused or failed: keep whatever was read rather than throwing a
+            // half-read week away, and stop. An unreadable home directory is
+            // not something a person can act on from a popover, and a chart
+            // that says "some of a week" is worse than one that says nothing.
+            other => {
+                sys::log(Level::Warn, &format!("the transcripts: {other:?}"));
+                let week = scan.give_up();
+                self.week = (!week.is_empty()).then_some(week);
+                self.week_read_at = Some(sys::now());
+                self.scanning = None;
+            }
+        }
+    }
+
     /// What the credentials file turned out to hold.
     fn take_credentials(&mut self, answer: Answer) {
         match answer {
@@ -230,9 +319,11 @@ impl Pirate {
             },
             Answer::Refused(sentence) => self.settle(Some(Problem::NotAllowed(sentence))),
             Answer::Failed(_) => self.settle(Some(Problem::NoSession)),
-            // The host answering a file read with a fetch would be a bug in
-            // the host, and there is nothing useful to draw about it.
-            Answer::Fetched { .. } => self.settle(Some(Problem::Unreachable)),
+            // The host answering a file read with something else would be a
+            // bug in the host, and there is nothing useful to draw about it.
+            Answer::Fetched { .. } | Answer::Counted { .. } => {
+                self.settle(Some(Problem::Unreachable))
+            }
         }
     }
 
@@ -254,11 +345,37 @@ impl Pirate {
                     None => self.settle(Some(Problem::Unreachable)),
                 }
             }
-            Answer::Fetched { .. } | Answer::Failed(_) | Answer::Read { .. } => {
+            Answer::Fetched { .. }
+            | Answer::Failed(_)
+            | Answer::Read { .. }
+            | Answer::Counted { .. } => {
                 self.settle(Some(Problem::Unreachable));
             }
             Answer::Refused(sentence) => self.settle(Some(Problem::NotAllowed(sentence))),
         }
+    }
+
+    /// Stops waiting on an answer that is not coming.
+    ///
+    /// Which frees the next cycle to start. Without this the plugin is
+    /// perfectly healthy and permanently asleep: it draws, it ticks, and every
+    /// refresh returns early because something it will never hear about is
+    /// still "in flight".
+    fn give_up_waiting(&mut self) {
+        let Some(since) = self.waiting_since else {
+            return;
+        };
+        if sys::now() - since < GIVE_UP_WAITING_AFTER {
+            return;
+        }
+
+        sys::log(
+            Level::Warn,
+            "nothing came back from what was asked for; starting again",
+        );
+        self.reading_credentials = None;
+        self.fetching = None;
+        self.settle(Some(Problem::Unreachable));
     }
 
     /// Starts a cycle, unless one is already running.
@@ -296,6 +413,7 @@ impl Pirate {
         self.reading_credentials = sys::ask(&Request::ReadFile {
             path: String::from(CREDENTIALS_PATH),
         });
+        self.waiting_since = Some(sys::now());
         if self.reading_credentials.is_none() {
             self.settle(Some(Problem::Unreachable));
         }
@@ -312,6 +430,7 @@ impl Pirate {
             ],
             body: None,
         });
+        self.waiting_since = Some(sys::now());
         if self.fetching.is_none() {
             self.settle(Some(Problem::Unreachable));
         }
@@ -320,6 +439,7 @@ impl Pirate {
     /// Ends a cycle: what it found, and when to come back.
     fn settle(&mut self, problem: Option<Problem>) {
         self.problem = problem;
+        self.waiting_since = None;
         self.busy = false;
         self.chomp = 0;
 
@@ -382,6 +502,16 @@ impl Pirate {
     /// Whether the panel is up.
     pub fn panel_open(&self) -> bool {
         self.panel_open
+    }
+
+    /// The week behind the number, once it has been read.
+    pub fn week(&self) -> Option<&Week> {
+        self.week.as_ref()
+    }
+
+    /// Whether the transcripts are being walked right now.
+    pub fn is_reading_the_week(&self) -> bool {
+        self.scanning.is_some()
     }
 
     /// Which of the host's icons to draw: the frame of the bite the mouth is

@@ -224,7 +224,9 @@ fn a_panel_says_where_the_number_came_from_and_where_it_does_not_go() {
     let texts = texts(&chip(&pirate));
 
     assert!(
-        texts.iter().any(|text| text.contains("Sent nowhere else")),
+        texts
+            .iter()
+            .any(|text| text.contains("read where they are and sent nowhere")),
         "{texts:?}"
     );
 }

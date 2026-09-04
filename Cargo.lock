@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "crook_plugin_api"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "postcard",
  "serde",
@@ -45,7 +45,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "pirate"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "crook_plugin_api",
  "serde",

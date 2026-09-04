@@ -367,7 +367,8 @@ fn clicking_the_chip_twice_asks_claude_once() {
     pirate.run("panel");
     let second = stub::taken().requests.len();
 
-    assert_eq!(first, 1, "opening it asks for a fresh reading");
+    // Two: the reading, and the first page of the transcripts behind it.
+    assert_eq!(first, 2, "opening it asks for a fresh reading and the week");
     assert_eq!(
         second, 0,
         "and putting it away asks for nothing: the figures must not move under a person dismissing them"
@@ -423,4 +424,55 @@ fn building_again_forgets_everything_the_last_life_was_waiting_on() {
     );
     assert_eq!(pirate.usable_reading(), None);
     assert_eq!(pirate.mark(), PIRATE);
+}
+
+#[test]
+fn an_answer_that_never_comes_does_not_stop_the_plugin_for_good() {
+    // Nothing in the ABI promises an answer, and a plugin that waited on one
+    // forever would be a chip drawing an hour-old number that looks exactly
+    // as current as a fresh one — with every click returning early because a
+    // cycle nobody will ever finish is still "in flight".
+    let (mut pirate, _credentials) = built();
+
+    // Nobody answers. Ticking short of the watchdog changes nothing.
+    stub::advance(GIVE_UP_WAITING_AFTER - 1);
+    pirate.tick();
+    assert!(
+        stub::taken().requests.is_empty(),
+        "it gave up on a cycle that was still within its time"
+    );
+
+    stub::advance(2);
+    pirate.tick();
+    assert_eq!(pirate.problem(), Some(&Problem::Unreachable));
+    let _ = stub::taken();
+
+    // Giving up ends the cycle rather than starting one: the poll it books is
+    // an ordinary one, a minute out, because something that has already been
+    // silent for three minutes is not worth hurrying back to.
+    stub::advance(POLL_MILLIS);
+    pirate.tick();
+
+    let asked = stub::taken();
+    assert!(
+        matches!(
+            asked.requests.first().map(|(_, request)| request),
+            Some(Request::ReadFile { .. })
+        ),
+        "the plugin never asked for anything again: {:?}",
+        asked.requests
+    );
+}
+
+#[test]
+fn a_cycle_that_is_answered_leaves_the_watchdog_with_nothing_to_do() {
+    // The other half: a slow answer that does arrive must not be mistaken for
+    // one that never will, and a settled cycle must not leave the watchdog
+    // armed against the *next* one.
+    let mut pirate = reading();
+
+    stub::advance(GIVE_UP_WAITING_AFTER * 2);
+    pirate.tick();
+
+    assert_eq!(pirate.problem(), None, "a finished cycle was given up on");
 }

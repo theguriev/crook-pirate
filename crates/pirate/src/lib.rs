@@ -28,6 +28,7 @@ use std::cell::UnsafeCell;
 use crook_plugin_api::{ABI_VERSION, Answer, Capability, Manifest, Node, from_bytes, to_bytes};
 
 pub mod claude;
+pub mod history;
 pub mod state;
 pub mod sys;
 pub mod time;
@@ -142,7 +143,10 @@ pub fn manifest() -> Manifest {
         ),
         version: String::from(env!("CARGO_PKG_VERSION")),
         capabilities: vec![
-            Capability::ReadFiles(vec![String::from(claude::CREDENTIALS_PATH)]),
+            Capability::ReadFiles(vec![
+                String::from(claude::CREDENTIALS_PATH),
+                String::from(history::TRANSCRIPTS_GRANT),
+            ]),
             Capability::Network(vec![String::from(claude::USAGE_HOST)]),
         ],
     }
@@ -231,7 +235,9 @@ mod tests {
         assert_eq!(
             sentences,
             vec![
-                String::from("Read ~/.claude/.credentials.json"),
+                String::from(
+                    "Read ~/.claude/.credentials.json, everything under ~/.claude/projects"
+                ),
                 String::from("Reach api.anthropic.com"),
             ]
         );
@@ -249,12 +255,13 @@ mod tests {
             .collect();
 
         assert!(keys.contains(&format!("file:{}", claude::CREDENTIALS_PATH)));
+        assert!(keys.contains(&format!("file:{}", history::TRANSCRIPTS_GRANT)));
         assert!(keys.contains(&format!("net:{}", claude::USAGE_HOST)));
         assert!(
             claude::USAGE_URL.starts_with(&format!("https://{}/", claude::USAGE_HOST)),
             "the URL it fetches is not on the host it asks for"
         );
-        assert_eq!(keys.len(), 2, "it asks for something it does not use");
+        assert_eq!(keys.len(), 3, "it asks for something it does not use");
     }
 
     #[test]

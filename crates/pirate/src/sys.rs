@@ -45,6 +45,7 @@ mod imports {
         pub fn request(bytes: *const u8, len: usize) -> i32;
         pub fn timer(millis: i32) -> i32;
         pub fn now() -> i64;
+        pub fn timezone() -> i32;
     }
 }
 
@@ -110,6 +111,20 @@ pub fn set_timer(millis: i32) {
     stub::record_timer(millis);
 }
 
+/// How far this machine's own time is from UTC, in minutes east of it.
+///
+/// Needed for one question and no other: which day a turn happened on. A chart
+/// of days is read against the days a person lived, and three hours either
+/// side of midnight is a different answer.
+pub fn timezone() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        imports::timezone()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    stub::timezone()
+}
+
 /// What time it is, in milliseconds since the epoch.
 pub fn now() -> i64 {
     #[cfg(target_arch = "wasm32")]
@@ -151,6 +166,10 @@ pub mod stub {
         /// under a test would be a test that fails at midnight.
         static CLOCK: RefCell<i64> = const { RefCell::new(1_788_544_800_000) };
         static TICKETS: RefCell<i32> = const { RefCell::new(0) };
+        /// Three hours east, which is where this was written and a zone with
+        /// no daylight saving in it — so a test that cares about days is not
+        /// also a test about the clocks going back.
+        static OFFSET: RefCell<i32> = const { RefCell::new(180) };
     }
 
     /// What has been asked for, leaving nothing behind.
@@ -176,6 +195,15 @@ pub mod stub {
 
     pub(super) fn now() -> i64 {
         CLOCK.with(|clock| *clock.borrow())
+    }
+
+    pub(super) fn timezone() -> i32 {
+        OFFSET.with(|offset| *offset.borrow())
+    }
+
+    /// Puts the machine in a time zone, for a test about which day is which.
+    pub fn set_timezone(minutes: i32) {
+        OFFSET.with(|offset| *offset.borrow_mut() = minutes);
     }
 
     /// The clock, for a test that has to build a stamp relative to it.
