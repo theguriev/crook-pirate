@@ -205,7 +205,7 @@ impl Pirate {
 
     /// Registers everything, and starts the first reading.
     pub fn build(&mut self) {
-        sys::contribute("header.right", "chip", 0);
+        sys::contribute(crate::HEADER_SLOT, "chip", 0);
         sys::register_action("refresh", Some("Refresh the usage reading"));
         sys::register_action("panel", Some("Show the usage panel"));
         // Reachable and not offered: it is what a click outside the panel

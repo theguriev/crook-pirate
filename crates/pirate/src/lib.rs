@@ -25,7 +25,9 @@
 
 use std::cell::UnsafeCell;
 
-use crook_plugin_api::{ABI_VERSION, Answer, Capability, Manifest, Node, from_bytes, to_bytes};
+use crook_plugin_api::{
+    ABI_VERSION, Answer, Capability, Manifest, Node, Render, from_bytes, to_bytes,
+};
 
 pub mod claude;
 pub mod history;
@@ -35,6 +37,12 @@ pub mod time;
 pub mod view;
 
 use state::Pirate;
+
+/// The slot the chip goes in: the one thing pinned to the right of the header.
+///
+/// Named once, because a render is now checked against it — a string in two
+/// places is a plugin that contributes to one slot and answers about another.
+pub const HEADER_SLOT: &str = "header.right";
 
 /// A `static` that is only ever touched by one thread, which on wasm32 is
 /// every thread there is.
@@ -171,14 +179,21 @@ pub extern "C" fn crook_build() -> i32 {
 }
 
 /// What to draw in one slot.
+///
+/// The host hands over a [`Render`] rather than a slot name — ABI 4, which
+/// exists for the slots that are drawn once per row of the tab panel and carry
+/// a subject saying which row. This plugin has one contribution and it is in
+/// the header, so the subject is always `None` and the slot is the whole of
+/// the question; the request is decoded anyway, because a plugin that guessed
+/// at the shape would draw its chip on whatever the host asked about next.
 #[unsafe(no_mangle)]
-pub extern "C" fn crook_render(slot: i32, length: i32) -> i64 {
+pub extern "C" fn crook_render(pointer: i32, length: i32) -> i64 {
     // SAFETY: the host allocated and wrote this before calling in.
-    let slot = unsafe { take(slot, length) };
-    let tree = match std::str::from_utf8(&slot) {
-        Ok("header.right") => view::chip(pirate()),
-        // A slot this plugin does not contribute to, which cannot happen and
-        // is drawn as nothing rather than guessed at.
+    let bytes = unsafe { take(pointer, length) };
+    let tree = match from_bytes::<Render>(&bytes) {
+        Ok(render) if render.slot == HEADER_SLOT => view::chip(pirate()),
+        // A slot this plugin does not contribute to, or a request this build
+        // cannot read: drawn as nothing rather than guessed at.
         _ => Node::Empty,
     };
     hand_back(to_bytes(&tree).unwrap_or_default())
