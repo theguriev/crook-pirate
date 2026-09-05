@@ -476,3 +476,98 @@ fn a_cycle_that_is_answered_leaves_the_watchdog_with_nothing_to_do() {
 
     assert_eq!(pirate.problem(), None, "a finished cycle was given up on");
 }
+
+#[test]
+fn being_told_to_ask_less_often_is_not_a_network_failure() {
+    // The request was right and the session was good; the answer was "later".
+    // Reporting that as "couldn't reach Claude" tells somebody their network
+    // is broken when it is not.
+    let mut pirate = reading();
+    stub::advance(POLL_MILLIS);
+    pirate.tick();
+    let fetch = stub::taken().requests[0].0;
+
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 429,
+            body: Vec::new(),
+        },
+    );
+
+    assert_eq!(pirate.problem(), Some(&Problem::RateLimited));
+    assert_eq!(
+        pirate.problem().expect("a problem").chip_label(),
+        "asked too often"
+    );
+    // And the number it already had is still the best one there is.
+    assert!(pirate.usable_reading().is_some());
+}
+
+#[test]
+fn a_rate_limit_is_left_alone_even_when_somebody_presses_refresh() {
+    // Asking again because a button was pressed is how a rate limit becomes a
+    // longer one — and the endpoint is shared with Claude Code itself.
+    let mut pirate = reading();
+    stub::advance(POLL_MILLIS);
+    pirate.tick();
+    let fetch = stub::taken().requests[0].0;
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 429,
+            body: Vec::new(),
+        },
+    );
+    let _ = stub::taken();
+
+    pirate.run("refresh");
+    assert!(
+        stub::taken().requests.is_empty(),
+        "a click broke the back-off"
+    );
+
+    // The ordinary poll does not break it either, until the wait is over.
+    stub::advance(POLL_MILLIS);
+    pirate.tick();
+    assert!(
+        stub::taken().requests.is_empty(),
+        "the poll broke the back-off"
+    );
+
+    stub::advance(BACK_OFF_FOR);
+    pirate.tick();
+    assert!(
+        !stub::taken().requests.is_empty(),
+        "it never asked again after backing off"
+    );
+}
+
+#[test]
+fn a_status_that_is_none_of_the_known_ones_is_said_with_its_number() {
+    // A person who can see 503 knows more than one who is told the network
+    // failed.
+    let mut pirate = reading();
+    stub::advance(POLL_MILLIS);
+    pirate.tick();
+    let fetch = stub::taken().requests[0].0;
+
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 503,
+            body: Vec::new(),
+        },
+    );
+
+    assert_eq!(pirate.problem(), Some(&Problem::Returned(503)));
+    assert!(
+        pirate
+            .problem()
+            .expect("a problem")
+            .message()
+            .contains("503"),
+        "{}",
+        pirate.problem().expect("a problem").message()
+    );
+}

@@ -40,6 +40,14 @@ use crate::sys::{self, Level};
 /// number in the header true enough to act on.
 pub const POLL_MILLIS: i64 = 60_000;
 
+/// How long to leave the endpoint alone after it says to.
+///
+/// A rate limit answered by asking again a minute later is a rate limit made
+/// worse, and the endpoint is shared with Claude Code itself — so the polite
+/// wait is minutes rather than the ordinary one. Nothing here is urgent: the
+/// number on the chip is a percentage of a five-hour window.
+pub const BACK_OFF_FOR: i64 = 5 * 60_000;
+
 /// How often it is refreshed when there is not one.
 ///
 /// There is nothing to poll until somebody runs Claude Code, and a plugin that
@@ -91,6 +99,15 @@ pub enum Problem {
     NoSession,
     /// There was one and it has stopped working.
     SessionExpired,
+    /// Anthropic said to ask less often.
+    ///
+    /// Its own state rather than a failure, because it is not one: the request
+    /// was right, the session was good, and the answer was "later". Saying
+    /// "couldn't reach Claude" to that is telling somebody their network is
+    /// broken when it is not.
+    RateLimited,
+    /// It answered with something that is not an answer.
+    Returned(u16),
     /// Something else: a socket, a proxy, a 500.
     Unreachable,
 }
@@ -115,7 +132,8 @@ impl Problem {
             Self::NotAllowed(_) => "not allowed",
             Self::NoSession => "no session",
             Self::SessionExpired => "session expired",
-            Self::Unreachable => "unavailable",
+            Self::RateLimited => "asked too often",
+            Self::Returned(_) | Self::Unreachable => "unavailable",
         }
     }
 
@@ -129,6 +147,11 @@ impl Problem {
             Self::SessionExpired => {
                 String::from("The Claude Code session expired — run Claude Code to refresh it.")
             }
+            Self::RateLimited => String::from(
+                "Anthropic is rate-limiting this endpoint, which Claude Code itself shares. \
+                 Leaving it alone for a few minutes.",
+            ),
+            Self::Returned(status) => format!("Claude answered {status}."),
             Self::Unreachable => String::from("Couldn't reach Claude."),
         }
     }
@@ -336,6 +359,9 @@ impl Pirate {
                 self.session = None;
                 self.settle(Some(Problem::SessionExpired));
             }
+            // Not a failure: the request was right and the answer was
+            // "later". Backing off is the whole of what to do about it.
+            Answer::Fetched { status: 429, .. } => self.settle(Some(Problem::RateLimited)),
             Answer::Fetched { status, body } if (200..300).contains(&status) => {
                 match claude::read_usage(&body) {
                     Some(reading) => {
@@ -345,10 +371,13 @@ impl Pirate {
                     None => self.settle(Some(Problem::Unreachable)),
                 }
             }
-            Answer::Fetched { .. }
-            | Answer::Failed(_)
-            | Answer::Read { .. }
-            | Answer::Counted { .. } => {
+            // A status that is none of the above, said with its number: a
+            // person who can see 503 knows more than one who is told the
+            // network failed.
+            Answer::Fetched { status, .. } => self.settle(Some(Problem::Returned(status))),
+            // The host answering a fetch with a file or a tally would be a bug
+            // in the host, and there is nothing useful to draw about it.
+            Answer::Failed(_) | Answer::Read { .. } | Answer::Counted { .. } => {
                 self.settle(Some(Problem::Unreachable));
             }
             Answer::Refused(sentence) => self.settle(Some(Problem::NotAllowed(sentence))),
@@ -386,6 +415,12 @@ impl Pirate {
     fn refresh(&mut self, asked_for: bool) {
         if self.is_waiting() {
             self.busy |= asked_for;
+            return;
+        }
+        // A click during a back-off is not a reason to break it. The endpoint
+        // said to ask later and it meant later; asking because somebody
+        // pressed a button is how a rate limit becomes a longer one.
+        if self.problem == Some(Problem::RateLimited) && sys::now() < self.next_poll_at {
             return;
         }
 
@@ -443,15 +478,13 @@ impl Pirate {
         self.busy = false;
         self.chomp = 0;
 
-        let nothing_to_poll = matches!(
-            self.problem,
-            Some(Problem::NoSession | Problem::NotAllowed(_))
-        );
         self.next_poll_at = sys::now()
-            + if nothing_to_poll {
-                IDLE_POLL_MILLIS
-            } else {
-                POLL_MILLIS
+            + match self.problem {
+                // Nothing to poll until somebody runs Claude Code, or until
+                // somebody allows this.
+                Some(Problem::NoSession | Problem::NotAllowed(_)) => IDLE_POLL_MILLIS,
+                Some(Problem::RateLimited) => BACK_OFF_FOR,
+                _ => POLL_MILLIS,
             };
     }
 
