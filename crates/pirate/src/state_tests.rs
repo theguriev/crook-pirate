@@ -1,8 +1,12 @@
 //! What the plugin does, without a terminal to do it in.
 //!
-//! Every import is stubbed (see `sys`), so a whole poll cycle — ask for the
-//! file, be handed it, ask for the reading, be handed that, come back in a
-//! minute — runs here in microseconds and is asserted rather than watched.
+//! Every import is stubbed (see `sys`), so a whole cycle — a click, ask for
+//! the file, be handed it, ask for the reading, be handed that — runs here in
+//! microseconds and is asserted rather than watched.
+//!
+//! The rule most of these are about: **only a click asks.** A build asks for
+//! nothing, a tick asks for nothing, and the one thing that can refuse a click
+//! is a rate limit that has not finished.
 
 use super::*;
 
@@ -15,19 +19,27 @@ const CREDENTIALS: &[u8] = br#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}
 const USAGE: &[u8] = br#"{"five_hour":{"utilization":47.4,"resets_at":"2026-09-04T18:30:00Z"},
                           "seven_day":{"utilization":62.0}}"#;
 
-/// A plugin that has built, with everything it asked for on the way taken.
-fn built() -> (Pirate, i32) {
+/// A plugin that has built and been clicked once, with the ticket the
+/// credentials read will answer with.
+///
+/// The transcripts it also asked for are left unanswered. No test below is
+/// about the chart, and a scan still walking is what one looks like.
+fn opened() -> (Pirate, i32) {
     stub::forget();
     let mut pirate = Pirate::new();
     pirate.build();
+    pirate.run("panel");
     let asked = stub::taken();
-    let ticket = asked.requests[0].0;
-    (pirate, ticket)
+    (pirate, asked.requests[0].0)
 }
 
-/// The same, carried all the way to a reading.
+/// The same, carried all the way to a reading and then put away.
+///
+/// Which is the plugin's ordinary state: a number on the chip, a shut panel,
+/// nothing in flight, and — after the tick the last cycle booked has been
+/// delivered — no wake-up booked either. A plugin at rest.
 fn reading() -> Pirate {
-    let (mut pirate, credentials) = built();
+    let (mut pirate, credentials) = opened();
     pirate.deliver(
         credentials,
         Answer::Read {
@@ -42,12 +54,16 @@ fn reading() -> Pirate {
             body: USAGE.to_vec(),
         },
     );
+    pirate.run("panel");
+    // The last frame of the bite is still booked; letting it arrive is what
+    // leaves the plugin with nothing outstanding at all.
+    pirate.tick();
     let _ = stub::taken();
     pirate
 }
 
 #[test]
-fn building_registers_the_chip_and_starts_reading() {
+fn building_registers_the_chip_and_asks_for_nothing() {
     stub::forget();
     let mut pirate = Pirate::new();
 
@@ -61,26 +77,26 @@ fn building_registers_the_chip_and_starts_reading() {
     assert_eq!(
         asked.actions,
         vec![
-            (
-                String::from("refresh"),
-                String::from("Refresh the usage reading")
-            ),
             (String::from("panel"), String::from("Show the usage panel")),
             // Reachable and not offered: a zero-length title.
             (String::from("dismiss"), String::new()),
         ]
     );
-    assert_eq!(
-        asked.requests.first().map(|(_, request)| request.clone()),
-        Some(Request::ReadFile {
-            path: String::from(CREDENTIALS_PATH)
-        })
+    assert!(
+        asked.requests.is_empty(),
+        "a plugin nobody has clicked must not spend a request: {:?}",
+        asked.requests
+    );
+    assert!(
+        asked.timers.is_empty(),
+        "and must not wake up to do it later either: {:?}",
+        asked.timers
     );
 }
 
 #[test]
 fn the_session_it_reads_is_what_it_asks_claude_with() {
-    let (mut pirate, credentials) = built();
+    let (mut pirate, credentials) = opened();
 
     pirate.deliver(
         credentials,
@@ -118,13 +134,89 @@ fn a_reading_that_lands_is_what_the_chip_then_says() {
 }
 
 #[test]
-fn a_second_reading_reuses_the_token_rather_than_the_file() {
-    // A poll a minute that opened a credentials file a minute would be a poll
-    // that shows up in somebody's audit log.
-    let mut pirate = reading();
-    stub::advance(POLL_MILLIS);
+fn opening_the_panel_asks_and_putting_it_away_does_not() {
+    stub::forget();
+    let mut pirate = Pirate::new();
+    pirate.build();
 
+    pirate.run("panel");
+    let opening = stub::taken().requests.len();
+    pirate.run("panel");
+    let closing = stub::taken().requests.len();
+
+    // Two: the reading, and the first page of the transcripts behind it.
+    assert_eq!(
+        opening, 2,
+        "opening it asks for a fresh reading and the week"
+    );
+    assert_eq!(
+        closing, 0,
+        "and putting it away asks for nothing: the figures must not move under a person dismissing them"
+    );
+    assert!(!pirate.panel_open());
+}
+
+#[test]
+fn a_shut_panel_asks_for_nothing_however_long_it_is_left() {
+    // The whole point of the change: a chip sitting in a header is not a
+    // reason to spend somebody's rate limit, and the endpoint is shared with
+    // Claude Code itself.
+    let mut pirate = reading();
+
+    for _ in 0..100 {
+        stub::advance(GIVE_UP_WAITING_AFTER);
+        pirate.tick();
+    }
+
+    let asked = stub::taken();
+    assert!(
+        asked.requests.is_empty(),
+        "something polled in the background: {:?}",
+        asked.requests
+    );
+    assert!(
+        asked.timers.is_empty(),
+        "and booked a wake-up to do it again: {:?}",
+        asked.timers
+    );
+}
+
+#[test]
+fn an_open_panel_is_redrawn_so_the_countdowns_stay_honest() {
+    // A redraw and nothing else. "resets in 40m" is worked out from the clock
+    // at the moment it is drawn, so a panel nothing wakes is a panel whose
+    // countdown stopped when it opened.
+    let mut pirate = reading();
+
+    pirate.run("panel");
+    let fetch = stub::taken().requests[0].0;
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 200,
+            body: USAGE.to_vec(),
+        },
+    );
+    let _ = stub::taken();
     pirate.tick();
+
+    let asked = stub::taken();
+    assert_eq!(asked.timers, vec![COUNTDOWN_MILLIS as i32]);
+    assert!(
+        asked.requests.is_empty(),
+        "a redraw is not a reason to ask Anthropic anything: {:?}",
+        asked.requests
+    );
+}
+
+#[test]
+fn a_second_reading_reuses_the_token_rather_than_the_file() {
+    // Opening the panel again is a request; opening the credentials file again
+    // would be a second one, and one that shows up in somebody's audit log for
+    // nothing.
+    let mut pirate = reading();
+
+    pirate.run("panel");
 
     let asked = stub::taken();
     assert!(
@@ -142,6 +234,7 @@ fn a_session_that_has_expired_is_read_from_the_file_again() {
     stub::forget();
     let mut pirate = Pirate::new();
     pirate.build();
+    pirate.run("panel");
     let credentials = stub::taken().requests[0].0;
     let expires_at = stub::_now_for_tests() + 1_000;
     pirate.deliver(
@@ -159,10 +252,10 @@ fn a_session_that_has_expired_is_read_from_the_file_again() {
             body: USAGE.to_vec(),
         },
     );
+    pirate.run("dismiss");
     let _ = stub::taken();
 
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
+    pirate.run("panel");
 
     assert!(
         matches!(
@@ -174,8 +267,8 @@ fn a_session_that_has_expired_is_read_from_the_file_again() {
 }
 
 #[test]
-fn a_machine_that_has_never_run_claude_code_says_so_and_asks_rarely() {
-    let (mut pirate, credentials) = built();
+fn a_machine_that_has_never_run_claude_code_says_so_and_then_rests() {
+    let (mut pirate, credentials) = opened();
 
     pirate.deliver(
         credentials,
@@ -188,17 +281,22 @@ fn a_machine_that_has_never_run_claude_code_says_so_and_asks_rarely() {
         "no session"
     );
 
-    // Nothing to poll until somebody runs Claude Code. The wait is asked for
-    // by the next tick rather than by the answer, because a tick was already
-    // coming and asking again would be asking twice.
+    // And nothing is scheduled to find out otherwise. There is nothing to poll
+    // until somebody runs Claude Code, and the click that opens the panel next
+    // is what will notice they have.
+    pirate.run("dismiss");
     let _ = stub::taken();
     pirate.tick();
-    assert_eq!(stub::taken().timers, vec![IDLE_POLL_MILLIS as i32]);
+    let asked = stub::taken();
+    assert!(
+        asked.requests.is_empty() && asked.timers.is_empty(),
+        "{asked:?}"
+    );
 }
 
 #[test]
 fn a_plugin_nobody_has_allowed_says_what_to_allow() {
-    let (mut pirate, credentials) = built();
+    let (mut pirate, credentials) = opened();
 
     pirate.deliver(
         credentials,
@@ -227,18 +325,17 @@ fn a_plugin_nobody_has_allowed_says_what_to_allow() {
 fn a_blip_keeps_the_number_and_a_dead_session_replaces_it() {
     let mut pirate = reading();
 
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
+    pirate.run("panel");
     let fetch = stub::taken().requests[0].0;
     pirate.deliver(fetch, Answer::Failed(String::from("connection reset")));
 
     assert!(
         pirate.usable_reading().is_some(),
-        "a network blip is not a reason to throw away a number from a minute ago"
+        "a network blip is not a reason to throw away the number the last opening got"
     );
 
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
+    pirate.run("panel");
+    pirate.run("panel");
     let fetch = stub::taken().requests[0].0;
     pirate.deliver(
         fetch,
@@ -256,16 +353,15 @@ fn a_blip_keeps_the_number_and_a_dead_session_replaces_it() {
 }
 
 #[test]
-fn a_background_poll_never_animates_and_a_click_always_does() {
+fn the_mouth_moves_only_while_somebody_is_waiting() {
     let mut pirate = reading();
     assert_eq!(pirate.mark(), PIRATE);
 
-    stub::advance(POLL_MILLIS);
+    // A tick with nothing in flight is a redraw, not a bite.
     pirate.tick();
-    assert_eq!(pirate.mark(), PIRATE, "nobody asked for this one");
-    let _ = stub::taken();
+    assert_eq!(pirate.mark(), PIRATE, "nobody is waiting on anything");
 
-    pirate.run("refresh");
+    pirate.run("panel");
     assert_eq!(pirate.mark(), CHOMP_CYCLE[0]);
     pirate.tick();
     assert_eq!(pirate.mark(), CHOMP_CYCLE[1]);
@@ -276,7 +372,7 @@ fn a_background_poll_never_animates_and_a_click_always_does() {
 #[test]
 fn the_bite_comes_back_round_to_a_whole_face() {
     let mut pirate = reading();
-    pirate.run("refresh");
+    pirate.run("panel");
 
     let cycle: Vec<&str> = (0..CHOMP_CYCLE.len() + 1)
         .map(|_| {
@@ -300,22 +396,20 @@ fn the_bite_comes_back_round_to_a_whole_face() {
 
 #[test]
 fn a_click_asks_to_be_woken_sooner_and_asks_once() {
-    // The bug that shipped first: a plugin already waiting a minute for its
-    // next poll never asked again, so the mark stood still for that minute
-    // with a person watching it. And the bug on the other side of it: asking
-    // again for a moment already booked is a heartbeat that doubles, then
-    // quadruples, and a plugin polling Anthropic at a rising rate is an
-    // account rate-limited.
+    // The bug that shipped first: a plugin already waiting for its next
+    // wake-up never asked again, so the mark stood still with a person
+    // watching it. And the bug on the other side of it: asking again for a
+    // moment already booked is a heartbeat that doubles, then quadruples.
     let mut pirate = reading();
 
-    pirate.run("refresh");
+    pirate.run("panel");
     assert_eq!(
         stub::taken().timers,
         vec![CHOMP_MILLIS as i32],
-        "a click wants the mark redrawn a frame from now, not a minute from now"
+        "a click wants the mark redrawn a frame from now"
     );
 
-    pirate.run("refresh");
+    pirate.run("dismiss");
     pirate.run("panel");
     assert!(
         stub::taken().timers.is_empty(),
@@ -332,48 +426,25 @@ fn a_click_asks_to_be_woken_sooner_and_asks_once() {
 
 #[test]
 fn the_bite_ending_does_not_book_a_second_heartbeat() {
-    // Coming back the other way: the answer lands, the mouth shuts, and the
-    // next poll is a minute off — which is later than the tick already
-    // coming, so nothing is asked for and the tick that arrives is the one
-    // that books the minute.
+    // Coming back the other way: the answer lands, the mouth shuts, and what
+    // is left to wake up for is the countdown under the bars — which is
+    // further off than the frame already booked, so nothing is asked for.
     let mut pirate = reading();
-    pirate.run("refresh");
-    let _ = stub::taken();
+    pirate.run("panel");
+    let fetch = stub::taken().requests[0].0;
 
-    let fetch = stub::taken().requests.first().map(|(ticket, _)| *ticket);
-    if let Some(ticket) = fetch {
-        pirate.deliver(
-            ticket,
-            Answer::Fetched {
-                status: 200,
-                body: USAGE.to_vec(),
-            },
-        );
-    }
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 200,
+            body: USAGE.to_vec(),
+        },
+    );
 
     assert!(
         stub::taken().timers.is_empty(),
         "a wait that is further off than the one already booked is not worth asking for"
     );
-}
-
-#[test]
-fn clicking_the_chip_twice_asks_claude_once() {
-    let mut pirate = reading();
-
-    pirate.run("panel");
-    assert!(pirate.panel_open());
-    let first = stub::taken().requests.len();
-    pirate.run("panel");
-    let second = stub::taken().requests.len();
-
-    // Two: the reading, and the first page of the transcripts behind it.
-    assert_eq!(first, 2, "opening it asks for a fresh reading and the week");
-    assert_eq!(
-        second, 0,
-        "and putting it away asks for nothing: the figures must not move under a person dismissing them"
-    );
-    assert!(!pirate.panel_open());
 }
 
 #[test]
@@ -403,24 +474,31 @@ fn an_answer_nothing_is_waiting_on_changes_nothing() {
 }
 
 #[test]
-fn building_again_forgets_everything_the_last_life_was_waiting_on() {
-    // The host builds a plugin again when it is switched back on and when a
-    // person answers what it asked to be allowed. Whatever the previous life
-    // was waiting on — a timer nobody will fire again, a ticket nobody will
-    // answer — has to go, or the plugin comes back permanently asleep.
+fn building_again_forgets_everything_and_asks_for_nothing() {
+    // The host builds a plugin again when it is switched back on, when a
+    // person answers what it asked to be allowed, and every time it starts.
+    // Whatever the previous life was waiting on — a timer nobody will fire
+    // again, a ticket nobody will answer — has to go. What must *not* replace
+    // it is a request: a build that asked would be a plugin spending one of a
+    // small budget on every restart, which is how it came to say "asked too
+    // often" for a living.
     let mut pirate = reading();
-    pirate.run("refresh");
+    pirate.run("panel");
     let _ = stub::taken();
 
     pirate = Pirate::new();
     pirate.build();
 
     let asked = stub::taken();
-    assert_eq!(asked.requests.len(), 1, "it asks again from the beginning");
-    assert_eq!(
-        asked.timers.len(),
-        1,
-        "and asks for a tick, which a plugin still holding a stale one would not"
+    assert!(
+        asked.requests.is_empty(),
+        "a rebuild asked Anthropic something nobody clicked for: {:?}",
+        asked.requests
+    );
+    assert!(
+        asked.timers.is_empty(),
+        "and booked a tick with nothing to do on it: {:?}",
+        asked.timers
     );
     assert_eq!(pirate.usable_reading(), None);
     assert_eq!(pirate.mark(), PIRATE);
@@ -429,16 +507,17 @@ fn building_again_forgets_everything_the_last_life_was_waiting_on() {
 #[test]
 fn an_answer_that_never_comes_does_not_stop_the_plugin_for_good() {
     // Nothing in the ABI promises an answer, and a plugin that waited on one
-    // forever would be a chip drawing an hour-old number that looks exactly
-    // as current as a fresh one — with every click returning early because a
+    // forever would be a chip drawing an hour-old number that looks exactly as
+    // current as a fresh one — with every click returning early because a
     // cycle nobody will ever finish is still "in flight".
-    let (mut pirate, _credentials) = built();
+    let (mut pirate, _credentials) = opened();
 
     // Nobody answers. Ticking short of the watchdog changes nothing.
     stub::advance(GIVE_UP_WAITING_AFTER - 1);
     pirate.tick();
-    assert!(
-        stub::taken().requests.is_empty(),
+    assert_eq!(
+        pirate.problem(),
+        None,
         "it gave up on a cycle that was still within its time"
     );
 
@@ -447,11 +526,10 @@ fn an_answer_that_never_comes_does_not_stop_the_plugin_for_good() {
     assert_eq!(pirate.problem(), Some(&Problem::Unreachable));
     let _ = stub::taken();
 
-    // Giving up ends the cycle rather than starting one: the poll it books is
-    // an ordinary one, a minute out, because something that has already been
-    // silent for three minutes is not worth hurrying back to.
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
+    // Giving up ends the cycle rather than starting one, and the next opening
+    // of the panel is free to ask again.
+    pirate.run("panel");
+    pirate.run("panel");
 
     let asked = stub::taken();
     assert!(
@@ -483,8 +561,7 @@ fn being_told_to_ask_less_often_is_not_a_network_failure() {
     // Reporting that as "couldn't reach Claude" tells somebody their network
     // is broken when it is not.
     let mut pirate = reading();
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
+    pirate.run("panel");
     let fetch = stub::taken().requests[0].0;
 
     pirate.deliver(
@@ -505,12 +582,12 @@ fn being_told_to_ask_less_often_is_not_a_network_failure() {
 }
 
 #[test]
-fn a_rate_limit_is_left_alone_even_when_somebody_presses_refresh() {
-    // Asking again because a button was pressed is how a rate limit becomes a
-    // longer one — and the endpoint is shared with Claude Code itself.
+fn a_rate_limit_is_left_alone_however_often_the_panel_is_opened() {
+    // The one thing a click may not argue with. Asking again because somebody
+    // opened the panel is how a rate limit becomes a longer one — and the
+    // endpoint is shared with Claude Code itself.
     let mut pirate = reading();
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
+    pirate.run("panel");
     let fetch = stub::taken().requests[0].0;
     pirate.deliver(
         fetch,
@@ -521,22 +598,18 @@ fn a_rate_limit_is_left_alone_even_when_somebody_presses_refresh() {
     );
     let _ = stub::taken();
 
-    pirate.run("refresh");
+    pirate.run("dismiss");
+    for _ in 0..5 {
+        pirate.run("panel");
+        pirate.run("dismiss");
+    }
     assert!(
         stub::taken().requests.is_empty(),
-        "a click broke the back-off"
-    );
-
-    // The ordinary poll does not break it either, until the wait is over.
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
-    assert!(
-        stub::taken().requests.is_empty(),
-        "the poll broke the back-off"
+        "opening the panel broke the back-off"
     );
 
     stub::advance(BACK_OFF_FOR);
-    pirate.tick();
+    pirate.run("panel");
     assert!(
         !stub::taken().requests.is_empty(),
         "it never asked again after backing off"
@@ -548,8 +621,7 @@ fn a_status_that_is_none_of_the_known_ones_is_said_with_its_number() {
     // A person who can see 503 knows more than one who is told the network
     // failed.
     let mut pirate = reading();
-    stub::advance(POLL_MILLIS);
-    pirate.tick();
+    pirate.run("panel");
     let fetch = stub::taken().requests[0].0;
 
     pirate.deliver(

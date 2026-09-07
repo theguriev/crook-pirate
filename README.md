@@ -12,6 +12,13 @@ Click him and a panel drops out with the limits behind that number — the rolli
 window and the weekly one, each with a bar and the time left on it — and then the week behind
 *those*: a column per day, what each model was used for, and which projects it went on.
 
+Opening that panel is also the only thing that refreshes the number. There is no background
+poll and no Refresh button: the endpoint the limits come from has a budget small enough that
+a handful of requests spends it, and it is shared with Claude Code itself. A chip that
+refreshed itself once a minute in a window nobody was looking at spent that budget on nobody,
+and what it drew for it was "asked too often". So the percentage you see is the one the last
+opening got, and it is exactly as old as it looks.
+
 <img src="assets/panel.png" alt="The panel: Session 47% and Week 62% with bars and countdowns; a chart of the last 7 days; Opus 5, Fable 5.1 and Haiku 4.5 with their tokens and shares; the busiest projects with their branches; 22,431 turns across 57 sessions" width="420">
 
 The limits come from Anthropic. The week comes from the transcripts Claude Code writes on this
@@ -22,9 +29,9 @@ a time was measured at ninety thousand instructions each, which for a week is fo
 interpreter; counting it where it is read takes about a second, on a thread nobody is waiting
 on.
 
-He chomps while a refresh **you asked for** is in flight, and only then — a background poll
-every minute animates nothing, because an animation on a timer nobody is watching repaints
-the header sixty times for no one.
+He chomps while the refresh is in flight, which is to say whenever the panel has just been
+opened — every refresh is one somebody asked for, so the mouth always means somebody is
+waiting.
 
 <img src="assets/bite.gif" alt="The pirate's mouth opening and closing while a refresh is in flight" width="320">
 
@@ -73,13 +80,13 @@ what your own account has spent. Nothing is sent anywhere else and nothing is st
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo test                                             # 64 tests, no wasm toolchain needed
+cargo test                                             # 73 tests, no wasm toolchain needed
 cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
 ```
 
 Everything except `src/sys.rs` builds for your own machine, which is how the whole plugin —
-when to poll, what to remember, what to draw — is tested by `cargo test` rather than by
+when to ask, what to remember, what to draw — is tested by `cargo test` rather than by
 installing it and watching a terminal. The imports are stubbed there and answer from a clock
 the tests set.
 
@@ -89,7 +96,7 @@ the tests set.
 | --- | --- |
 | `crates/pirate/src/lib.rs` | The ABI: every export Crook calls, each three lines, none of which decides anything. |
 | `crates/pirate/src/sys.rs` | The six imports, and the stubs that stand in for them off wasm. |
-| `crates/pirate/src/state.rs` | When to ask, what to remember, what a person is waiting on. |
+| `crates/pirate/src/state.rs` | When to ask — which is when you open the panel — what to remember, and what a person is waiting on. |
 | `crates/pirate/src/claude.rs` | The two JSON shapes: the credentials file and the usage endpoint. |
 | `crates/pirate/src/history.rs` | What to have counted out of the transcripts, and what the totals mean. |
 | `crates/pirate/src/view.rs` | The chip and the panel, as a tree Crook paints. |
