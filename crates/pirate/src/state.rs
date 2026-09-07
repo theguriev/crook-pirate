@@ -1,27 +1,52 @@
 //! When to ask, what to remember, and what a person is waiting on.
 //!
-//! # Everything happens because a tick happened
+//! # Nothing is asked until somebody opens the panel
+//!
+//! There is no background poll. The endpoint behind the number has a budget
+//! small enough that a handful of requests spends it, and it is shared with
+//! Claude Code itself — which is the thing a person actually came to use. A
+//! chip refreshing itself once a minute in the corner of a window nobody is
+//! looking at spends that budget on nobody, and the first thing it costs is
+//! the answer to "how much have I got left", which is the one question the
+//! chip exists to answer. The plugin used to do exactly that, and the number
+//! it drew was "asked too often" often enough to be the only thing it said.
+//!
+//! So opening the panel is the only thing that asks — see [`Pirate::run`] —
+//! and a build asks for nothing at all, which matters because a build happens
+//! every time the host is restarted or a grant is answered. The number on the
+//! chip between two openings is the one the last opening got, and it is
+//! exactly as old as it looks.
+//!
+//! # A timer is asked for only when there is something to do
 //!
 //! A plugin has one timer and cannot take an answer back: the host keeps the
 //! newest thing it was asked for and drops whatever was coming before it. So
 //! there is exactly one place that asks — see [`Pirate::arm`] — and it asks
-//! only when it wants to be woken *sooner* than it already will be. The
-//! schedule itself lives in [`Pirate::next_poll_at`] rather than in the length
-//! of the wait, so a tick is a heartbeat that asks "is it time yet".
+//! only when it wants to be woken *sooner* than it already will be, because
+//! asking again for a moment already booked is a heartbeat that doubles and
+//! then quadruples.
 //!
-//! Both halves of that matter. Asking again for the same moment would be a
-//! heartbeat that doubles, then quadruples, and a plugin polling Anthropic at
-//! a rising rate is an account rate-limited. Never asking again is the bug
-//! that shipped first: a click wants the mark redrawn every hundred
-//! milliseconds, and a plugin already waiting a minute for its next poll would
-//! stand still for that minute with a person watching it.
+//! Three things want a tick: the bite, which is a frame every hundred
+//! milliseconds; the watchdog, which is what frees a cycle whose answer never
+//! came; and an open panel, whose countdowns go stale if nothing redraws
+//! them. When none of them do, nothing is asked for and the plugin costs
+//! nothing at all until it is clicked.
 //!
 //! # The mouth means a person is waiting, and nothing else
 //!
-//! The chomp runs while a refresh *somebody asked for* is in flight, never on
-//! a background poll. That is the rule the chip kept when it was in the box,
-//! and the reason is unchanged: an animation on a timer nobody is watching
-//! repaints the header sixty times for no one.
+//! The chomp runs while a refresh *somebody asked for* is in flight, and only
+//! then. That is the rule the chip kept when it was in the box, and the reason
+//! is unchanged: an animation on a timer nobody is watching repaints the
+//! header sixty times for no one. A click that the back-off refuses buys no
+//! bite either, because nothing went out and nobody is waiting.
+//!
+//! What the rule does *not* mean is that the mouth shuts the instant the
+//! answer lands. A request answered in forty milliseconds would move it for
+//! less than half a frame, and a click that drew nothing reads as a click that
+//! was missed — so a bite is bought by the length of [`CHOMP_FOR`] rather than
+//! by the length of the request. It finishes on a shut mouth whenever it runs
+//! out, which is what [`CHOMP_CYCLE`] returning to its own first frame is
+//! for.
 //!
 //! # A failure does not throw the last number away
 //!
@@ -35,34 +60,33 @@ use crate::claude::{self, CREDENTIALS_PATH, OAUTH_BETA, Reading, Session, USAGE_
 use crate::history::{self, Week};
 use crate::sys::{self, Level};
 
-/// How often the reading is refreshed while there is a session to read it
-/// with. The endpoint's own window is five hours; a minute is what makes the
-/// number in the header true enough to act on.
-pub const POLL_MILLIS: i64 = 60_000;
-
 /// How long to leave the endpoint alone after it says to.
 ///
-/// A rate limit answered by asking again a minute later is a rate limit made
-/// worse, and the endpoint is shared with Claude Code itself — so the polite
-/// wait is minutes rather than the ordinary one. Nothing here is urgent: the
+/// The one thing that overrides "opening the panel asks". A person who has
+/// just been told to ask less often can open and shut the panel as often as
+/// they like and nothing goes out until this has passed: a rate limit
+/// answered by asking again straight away is a rate limit made worse, and the
+/// endpoint is shared with Claude Code itself. Nothing here is urgent — the
 /// number on the chip is a percentage of a five-hour window.
 pub const BACK_OFF_FOR: i64 = 5 * 60_000;
-
-/// How often it is refreshed when there is not one.
-///
-/// There is nothing to poll until somebody runs Claude Code, and a plugin that
-/// asked every minute for a file that is not there would be a plugin spending
-/// a wake-up a minute to learn the same thing.
-pub const IDLE_POLL_MILLIS: i64 = 10 * 60_000;
 
 /// How long one frame of the bite is held.
 pub const CHOMP_MILLIS: i64 = 110;
 
+/// How often an open panel is redrawn.
+///
+/// Nothing is asked of Anthropic on this timer and nothing changes because of
+/// it. It exists for the line under each bar — "resets in 40m" — which is
+/// worked out from the clock at the moment it is drawn, and which would
+/// otherwise sit at the minute the panel happened to open while somebody
+/// watched it.
+pub const COUNTDOWN_MILLIS: i64 = 30_000;
+
 /// How long a week read stays fresh.
 ///
-/// A minute, matching the poll: the transcripts are read when the panel opens,
-/// and opening it twice inside a minute should not walk three hundred
-/// megabytes twice for a chart that cannot have changed enough to see.
+/// A minute: the transcripts are read when the panel opens, and opening it
+/// twice inside a minute should not walk three hundred megabytes twice for a
+/// chart that cannot have changed enough to see.
 pub const WEEK_FRESH_FOR: i64 = 60_000;
 
 /// How long to wait for an answer before deciding one is not coming.
@@ -75,9 +99,19 @@ pub const WEEK_FRESH_FOR: i64 = 60_000;
 /// looking exactly as current as one drawn a second ago, and no click would
 /// wake it because a cycle is already "in flight".
 ///
-/// Three poll intervals, because a request that is genuinely slow is slow in
-/// seconds and this must not race one that is merely on a bad network.
-pub const GIVE_UP_WAITING_AFTER: i64 = 3 * POLL_MILLIS;
+/// Three minutes, because a request that is genuinely slow is slow in seconds
+/// and this must not race one that is merely on a bad network.
+pub const GIVE_UP_WAITING_AFTER: i64 = 3 * 60_000;
+
+/// How long a bite lasts at the shortest.
+///
+/// A click has to be seen to have done something, and the thing it does here
+/// is usually over before a frame of the animation has been drawn. So the
+/// mouth keeps moving for this long whether or not the answer has landed:
+/// about two turns of the cycle, which is long enough to read as a bite and
+/// short enough that nobody waits for it. The frame it stops on is never a
+/// half-open mouth — see [`CHOMP_CYCLE`].
+pub const CHOMP_FOR: i64 = 900;
 
 /// The bite, in the host's own icon names, ending where it starts so that
 /// stopping on any frame boundary stops on a whole face.
@@ -179,12 +213,20 @@ pub struct Pirate {
     busy: bool,
     /// How far into the bite the mouth is.
     chomp: usize,
+    /// When the bite a click bought runs out, in milliseconds since the epoch.
+    ///
+    /// The half of the animation that outlives the request. See [`CHOMP_FOR`].
+    chomping_until: i64,
     /// The ticket the credentials read will answer with.
     reading_credentials: Option<i32>,
     /// The ticket the usage request will answer with.
     fetching: Option<i32>,
-    /// When the next background poll is due, in milliseconds since the epoch.
-    next_poll_at: i64,
+    /// The earliest a new cycle may start, in milliseconds since the epoch.
+    ///
+    /// Zero nearly always, because opening the panel is allowed to ask. Only
+    /// a rate limit sets it — see [`BACK_OFF_FOR`] — which is the one answer
+    /// a click is not allowed to argue with.
+    not_before: i64,
     /// When the cycle in flight asked for what it is waiting on.
     ///
     /// The watchdog's whole state. See [`GIVE_UP_WAITING_AFTER`].
@@ -203,30 +245,34 @@ impl Pirate {
         Self::default()
     }
 
-    /// Registers everything, and starts the first reading.
+    /// Registers the chip and the two actions, and asks for nothing.
     pub fn build(&mut self) {
         sys::contribute(crate::HEADER_SLOT, "chip", 0);
-        sys::register_action("refresh", Some("Refresh the usage reading"));
         sys::register_action("panel", Some("Show the usage panel"));
         // Reachable and not offered: it is what a click outside the panel
         // runs, and nobody goes looking for it in a palette.
         sys::register_action("dismiss", None);
 
-        self.refresh(false);
+        // And nothing else. A build is not a person asking, and the host
+        // builds a plugin again whenever it is switched back on, whenever a
+        // grant is answered, and every time it is started — so a build that
+        // asked would be a plugin that spends a request on every restart.
         self.arm();
     }
 
     /// Runs one of the actions registered above.
+    ///
+    /// Opening the panel is the whole of when this plugin asks Anthropic
+    /// anything. See the module note.
     pub fn run(&mut self, action: &str) {
         match action {
-            "refresh" => self.refresh(true),
             "panel" => {
                 self.panel_open = !self.panel_open;
                 // Asked for on the way up only. The figures a person is
                 // looking at should not move under them because they clicked
                 // the chip again to put the panel away.
                 if self.panel_open {
-                    self.refresh(true);
+                    self.refresh();
                     self.read_the_week();
                 }
             }
@@ -237,15 +283,16 @@ impl Pirate {
     }
 
     /// The wait asked for has passed.
+    ///
+    /// It never starts a cycle: a tick is the bite moving, the watchdog
+    /// looking, and an open panel being redrawn. Nothing here asks Anthropic
+    /// for anything, because nobody clicked.
     pub fn tick(&mut self) {
         self.waking_at = None;
         self.give_up_waiting();
 
-        if self.busy {
+        if self.is_chomping() {
             self.chomp = (self.chomp + 1) % CHOMP_CYCLE.len();
-        }
-        if sys::now() >= self.next_poll_at && !self.is_waiting() {
-            self.refresh(false);
         }
 
         self.arm();
@@ -405,23 +452,29 @@ impl Pirate {
 
     /// Starts a cycle, unless one is already running.
     ///
-    /// `asked_for` is what the mouth means. A second click while a refresh is
-    /// in flight starts no second request — but it does start the animation,
-    /// because somebody is now waiting on an answer that was already coming.
-    fn refresh(&mut self, asked_for: bool) {
-        if self.is_waiting() {
-            self.busy |= asked_for;
-            return;
-        }
+    /// Every cycle is one a person asked for, which is why the mouth always
+    /// moves. A second click while a refresh is in flight starts no second
+    /// request — but it does keep the animation, because somebody is still
+    /// waiting on an answer that was already coming.
+    fn refresh(&mut self) {
         // A click during a back-off is not a reason to break it. The endpoint
-        // said to ask later and it meant later; asking because somebody
-        // pressed a button is how a rate limit becomes a longer one.
-        if self.problem == Some(Problem::RateLimited) && sys::now() < self.next_poll_at {
+        // said to ask later and it meant later; asking because somebody opened
+        // the panel again is how a rate limit becomes a longer one. Nor does it
+        // buy a bite: a mouth moving over a request that never went out is the
+        // chip saying it is doing something it is not.
+        if !self.is_waiting() && sys::now() < self.not_before {
             return;
         }
 
-        self.busy = asked_for;
-        self.chomp = 0;
+        self.busy = true;
+        // The bite outlives the answer that ends it. Set from here rather than
+        // from the request, so that a second click while one is in flight
+        // extends the animation even though it starts no second request.
+        self.chomping_until = sys::now() + CHOMP_FOR;
+
+        if self.is_waiting() {
+            return;
+        }
 
         match self
             .session
@@ -467,21 +520,21 @@ impl Pirate {
         }
     }
 
-    /// Ends a cycle: what it found, and when to come back.
+    /// Ends a cycle: what it found, and whether the next click may ask.
     fn settle(&mut self, problem: Option<Problem>) {
         self.problem = problem;
         self.waiting_since = None;
         self.busy = false;
-        self.chomp = 0;
+        // And the bite is left alone: it belongs to the click, not to the
+        // request, and cutting it off here is exactly the flicker `CHOMP_FOR`
+        // exists to prevent.
 
-        self.next_poll_at = sys::now()
-            + match self.problem {
-                // Nothing to poll until somebody runs Claude Code, or until
-                // somebody allows this.
-                Some(Problem::NoSession | Problem::NotAllowed(_)) => IDLE_POLL_MILLIS,
-                Some(Problem::RateLimited) => BACK_OFF_FOR,
-                _ => POLL_MILLIS,
-            };
+        // Only one answer books anything: being told to ask less often. Every
+        // other ending leaves the next opening of the panel free to ask.
+        self.not_before = match self.problem {
+            Some(Problem::RateLimited) => sys::now() + BACK_OFF_FOR,
+            _ => 0,
+        };
     }
 
     /// Asks to be ticked, if the tick that is coming is not soon enough.
@@ -490,15 +543,11 @@ impl Pirate {
     /// for a moment already booked is a heartbeat that doubles, and never
     /// asking again is a mark that stands still while somebody watches it.
     fn arm(&mut self) {
-        let now = sys::now();
-        let waiting = if self.busy {
-            CHOMP_MILLIS
-        } else {
-            // A second at the shortest, so that a plugin whose schedule has
-            // fallen behind catches up rather than spinning.
-            (self.next_poll_at - now).clamp(1_000, IDLE_POLL_MILLIS)
+        let Some(waiting) = self.wants_a_tick_in() else {
+            return;
         };
 
+        let now = sys::now();
         let waking_at = now + waiting;
         if self.waking_at.is_some_and(|booked| booked <= waking_at) {
             return;
@@ -506,6 +555,24 @@ impl Pirate {
 
         sys::set_timer(waiting as i32);
         self.waking_at = Some(waking_at);
+    }
+
+    /// How long until there is something to do, when there is anything.
+    ///
+    /// `None` is the ordinary state of this plugin: a number on a chip, a
+    /// panel that is shut, and nothing that will change either until somebody
+    /// clicks. A plugin in that state asks for no timer, so the host never
+    /// wakes it and it costs a person nothing.
+    fn wants_a_tick_in(&self) -> Option<i64> {
+        if self.is_chomping() {
+            return Some(CHOMP_MILLIS);
+        }
+        // Not busy and still waiting: the watchdog is the only thing that can
+        // free a cycle whose answer nobody is going to deliver.
+        if self.is_waiting() {
+            return Some(GIVE_UP_WAITING_AFTER);
+        }
+        self.panel_open.then_some(COUNTDOWN_MILLIS)
     }
 
     /// Whether an answer is already on its way.
@@ -546,11 +613,23 @@ impl Pirate {
     /// Which of the host's icons to draw: the frame of the bite the mouth is
     /// on, or a shut one when nobody is waiting.
     pub fn mark(&self) -> &'static str {
-        if self.busy {
+        if self.is_chomping() {
             CHOMP_CYCLE[self.chomp % CHOMP_CYCLE.len()]
         } else {
             PIRATE
         }
+    }
+
+    /// Whether the mouth is moving.
+    ///
+    /// Three reasons, in the order they run out: an answer somebody is waiting
+    /// on, the rest of the bite that answer was too quick to fill, and — last
+    /// — a mouth that is not shut yet. The third is what stops a burst ending
+    /// on a face caught mid-bite: the cycle is always walked back round to its
+    /// own first frame, which is the closed one, before the animation is
+    /// allowed to stop.
+    fn is_chomping(&self) -> bool {
+        self.busy || sys::now() < self.chomping_until || self.chomp != 0
     }
 }
 

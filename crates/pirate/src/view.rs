@@ -122,7 +122,9 @@ fn rounded(percent: f32) -> u32 {
 /// What hangs under the chip: the limits, and where the number came from.
 ///
 /// The chip has room for one number, and one number is not an answer to "am I
-/// about to run out, and on what".
+/// about to run out, and on what". Drawing this is also the only thing that
+/// refreshes it — see [`crate::state`] — which is why there is nothing here to
+/// press.
 fn panel(pirate: &Pirate) -> Node {
     let mut rows: Vec<Node> = Vec::new();
 
@@ -153,21 +155,18 @@ fn panel(pirate: &Pirate) -> Node {
     rows.extend(week(pirate));
 
     rows.push(Node::Rule);
+    // And no Refresh button under it. Opening the panel is what refreshes it,
+    // so a button here would be an offer to do again, by hand, the thing that
+    // has just been done — against an endpoint whose whole problem is being
+    // asked twice.
     rows.push(Node::Note {
         text: String::from(
-            "The limits come from Anthropic; the week comes from the transcripts Claude Code \
-             writes on this machine, read where they are and sent nowhere.",
+            "The limits come from Anthropic, read when this panel opens; the week comes from \
+             the transcripts Claude Code writes on this machine, read where they are and sent \
+             nowhere.",
         ),
         tone: Tone::Muted,
     });
-    rows.push(Node::Row(vec![
-        Node::Fill,
-        Node::Button {
-            label: String::from("Refresh"),
-            action: String::from("refresh"),
-            tone: Tone::Accent,
-        },
-    ]));
 
     Node::Column(rows)
 }

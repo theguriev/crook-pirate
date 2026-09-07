@@ -14,10 +14,14 @@ use crate::sys::stub;
 const CREDENTIALS: &[u8] = br#"{"claudeAiOauth":{"accessToken":"x"}}"#;
 
 /// A plugin carried to whatever `answer` says the endpoint replied.
+///
+/// By way of a click, because a click is the only thing that asks: a plugin
+/// that has merely built has asked nobody anything.
 fn answered(status: u16, body: &[u8]) -> Pirate {
     stub::forget();
     let mut pirate = Pirate::new();
     pirate.build();
+    pirate.run("panel");
     let credentials = stub::taken().requests[0].0;
     pirate.deliver(
         credentials,
@@ -33,6 +37,9 @@ fn answered(status: u16, body: &[u8]) -> Pirate {
             body: body.to_vec(),
         },
     );
+    // Put away again, so that every test below opens the panel itself and the
+    // tree it asserts is the one that opening put there.
+    pirate.run("dismiss");
     let _ = stub::taken();
     pirate
 }
