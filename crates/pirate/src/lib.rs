@@ -199,11 +199,22 @@ pub extern "C" fn crook_render(pointer: i32, length: i32) -> i64 {
     hand_back(to_bytes(&tree).unwrap_or_default())
 }
 
-/// Runs one of the actions registered while building.
+/// Runs one of the actions registered while building, with whatever the thing
+/// that was pressed had to say.
+///
+/// Four numbers rather than two, because that is the call the host makes:
+/// `crook_run(name, name_len, argument, argument_len)`. Nothing this plugin
+/// draws is a picker or a menu, so the argument is always empty and is taken
+/// only to free it — but it cannot be left off the signature. `wasmi` looks an
+/// export up *by its type*, so a two-parameter `crook_run` is not a
+/// `crook_run` the host can find at all, and every action here failed at that
+/// lookup rather than inside it: the chip would not open its panel and neither
+/// the refresh nor the panel entry in the palette did anything.
 #[unsafe(no_mangle)]
-pub extern "C" fn crook_run(name: i32, length: i32) -> i32 {
-    // SAFETY: as above.
-    let name = unsafe { take(name, length) };
+pub extern "C" fn crook_run(name: i32, name_len: i32, argument: i32, argument_len: i32) -> i32 {
+    // SAFETY: as above. Both are freed rather than leaked once per press.
+    let name = unsafe { take(name, name_len) };
+    let _ = unsafe { take(argument, argument_len) };
     match std::str::from_utf8(&name) {
         Ok(action) => pirate().run(action),
         Err(_) => return 1,
