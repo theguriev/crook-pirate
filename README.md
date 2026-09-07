@@ -31,7 +31,10 @@ on.
 
 He chomps while the refresh is in flight, which is to say whenever the panel has just been
 opened — every refresh is one somebody asked for, so the mouth always means somebody is
-waiting.
+waiting. The bite lasts about nine hundred milliseconds whether or not the answer has landed:
+a request that comes back in forty would otherwise move the mouth for less than half a frame,
+and a click that draws nothing reads as a click that was missed. It always finishes on a shut
+mouth, whichever frame it happens to run out on.
 
 <img src="assets/bite.gif" alt="The pirate's mouth opening and closing while a refresh is in flight" width="320">
 
@@ -80,7 +83,7 @@ what your own account has spent. Nothing is sent anywhere else and nothing is st
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo test                                             # 73 tests, no wasm toolchain needed
+cargo test                                             # 76 tests, no wasm toolchain needed
 cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
 ```

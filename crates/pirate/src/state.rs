@@ -34,10 +34,19 @@
 //!
 //! # The mouth means a person is waiting, and nothing else
 //!
-//! The chomp runs while a refresh *somebody asked for* is in flight, never on
-//! a background poll. That is the rule the chip kept when it was in the box,
-//! and the reason is unchanged: an animation on a timer nobody is watching
-//! repaints the header sixty times for no one.
+//! The chomp runs while a refresh *somebody asked for* is in flight, and only
+//! then. That is the rule the chip kept when it was in the box, and the reason
+//! is unchanged: an animation on a timer nobody is watching repaints the
+//! header sixty times for no one. A click that the back-off refuses buys no
+//! bite either, because nothing went out and nobody is waiting.
+//!
+//! What the rule does *not* mean is that the mouth shuts the instant the
+//! answer lands. A request answered in forty milliseconds would move it for
+//! less than half a frame, and a click that drew nothing reads as a click that
+//! was missed — so a bite is bought by the length of [`CHOMP_FOR`] rather than
+//! by the length of the request. It finishes on a shut mouth whenever it runs
+//! out, which is what [`CHOMP_CYCLE`] returning to its own first frame is
+//! for.
 //!
 //! # A failure does not throw the last number away
 //!
@@ -93,6 +102,16 @@ pub const WEEK_FRESH_FOR: i64 = 60_000;
 /// Three minutes, because a request that is genuinely slow is slow in seconds
 /// and this must not race one that is merely on a bad network.
 pub const GIVE_UP_WAITING_AFTER: i64 = 3 * 60_000;
+
+/// How long a bite lasts at the shortest.
+///
+/// A click has to be seen to have done something, and the thing it does here
+/// is usually over before a frame of the animation has been drawn. So the
+/// mouth keeps moving for this long whether or not the answer has landed:
+/// about two turns of the cycle, which is long enough to read as a bite and
+/// short enough that nobody waits for it. The frame it stops on is never a
+/// half-open mouth — see [`CHOMP_CYCLE`].
+pub const CHOMP_FOR: i64 = 900;
 
 /// The bite, in the host's own icon names, ending where it starts so that
 /// stopping on any frame boundary stops on a whole face.
@@ -194,6 +213,10 @@ pub struct Pirate {
     busy: bool,
     /// How far into the bite the mouth is.
     chomp: usize,
+    /// When the bite a click bought runs out, in milliseconds since the epoch.
+    ///
+    /// The half of the animation that outlives the request. See [`CHOMP_FOR`].
+    chomping_until: i64,
     /// The ticket the credentials read will answer with.
     reading_credentials: Option<i32>,
     /// The ticket the usage request will answer with.
@@ -268,7 +291,7 @@ impl Pirate {
         self.waking_at = None;
         self.give_up_waiting();
 
-        if self.busy {
+        if self.is_chomping() {
             self.chomp = (self.chomp + 1) % CHOMP_CYCLE.len();
         }
 
@@ -434,19 +457,24 @@ impl Pirate {
     /// request — but it does keep the animation, because somebody is still
     /// waiting on an answer that was already coming.
     fn refresh(&mut self) {
-        if self.is_waiting() {
-            self.busy = true;
-            return;
-        }
         // A click during a back-off is not a reason to break it. The endpoint
         // said to ask later and it meant later; asking because somebody opened
-        // the panel again is how a rate limit becomes a longer one.
-        if sys::now() < self.not_before {
+        // the panel again is how a rate limit becomes a longer one. Nor does it
+        // buy a bite: a mouth moving over a request that never went out is the
+        // chip saying it is doing something it is not.
+        if !self.is_waiting() && sys::now() < self.not_before {
             return;
         }
 
         self.busy = true;
-        self.chomp = 0;
+        // The bite outlives the answer that ends it. Set from here rather than
+        // from the request, so that a second click while one is in flight
+        // extends the animation even though it starts no second request.
+        self.chomping_until = sys::now() + CHOMP_FOR;
+
+        if self.is_waiting() {
+            return;
+        }
 
         match self
             .session
@@ -497,7 +525,9 @@ impl Pirate {
         self.problem = problem;
         self.waiting_since = None;
         self.busy = false;
-        self.chomp = 0;
+        // And the bite is left alone: it belongs to the click, not to the
+        // request, and cutting it off here is exactly the flicker `CHOMP_FOR`
+        // exists to prevent.
 
         // Only one answer books anything: being told to ask less often. Every
         // other ending leaves the next opening of the panel free to ask.
@@ -534,7 +564,7 @@ impl Pirate {
     /// clicks. A plugin in that state asks for no timer, so the host never
     /// wakes it and it costs a person nothing.
     fn wants_a_tick_in(&self) -> Option<i64> {
-        if self.busy {
+        if self.is_chomping() {
             return Some(CHOMP_MILLIS);
         }
         // Not busy and still waiting: the watchdog is the only thing that can
@@ -583,11 +613,23 @@ impl Pirate {
     /// Which of the host's icons to draw: the frame of the bite the mouth is
     /// on, or a shut one when nobody is waiting.
     pub fn mark(&self) -> &'static str {
-        if self.busy {
+        if self.is_chomping() {
             CHOMP_CYCLE[self.chomp % CHOMP_CYCLE.len()]
         } else {
             PIRATE
         }
+    }
+
+    /// Whether the mouth is moving.
+    ///
+    /// Three reasons, in the order they run out: an answer somebody is waiting
+    /// on, the rest of the bite that answer was too quick to fill, and — last
+    /// — a mouth that is not shut yet. The third is what stops a burst ending
+    /// on a face caught mid-bite: the cycle is always walked back round to its
+    /// own first frame, which is the closed one, before the animation is
+    /// allowed to stop.
+    fn is_chomping(&self) -> bool {
+        self.busy || sys::now() < self.chomping_until || self.chomp != 0
     }
 }
 

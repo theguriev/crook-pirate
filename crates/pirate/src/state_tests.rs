@@ -55,9 +55,13 @@ fn reading() -> Pirate {
         },
     );
     pirate.run("panel");
-    // The last frame of the bite is still booked; letting it arrive is what
-    // leaves the plugin with nothing outstanding at all.
-    pirate.tick();
+    // And the bite the click bought is let run out, so that what comes back
+    // has nothing outstanding at all: no request, no answer, no burst, and no
+    // wake-up booked to carry any of them on.
+    stub::advance(CHOMP_FOR);
+    for _ in 0..CHOMP_CYCLE.len() {
+        pirate.tick();
+    }
     let _ = stub::taken();
     pirate
 }
@@ -198,6 +202,8 @@ fn an_open_panel_is_redrawn_so_the_countdowns_stay_honest() {
         },
     );
     let _ = stub::taken();
+    // Past the bite the click bought, which books its own faster tick.
+    stub::advance(CHOMP_FOR);
     pirate.tick();
 
     let asked = stub::taken();
@@ -285,6 +291,10 @@ fn a_machine_that_has_never_run_claude_code_says_so_and_then_rests() {
     // until somebody runs Claude Code, and the click that opens the panel next
     // is what will notice they have.
     pirate.run("dismiss");
+    stub::advance(CHOMP_FOR);
+    for _ in 0..CHOMP_CYCLE.len() {
+        pirate.tick();
+    }
     let _ = stub::taken();
     pirate.tick();
     let asked = stub::taken();
@@ -367,6 +377,107 @@ fn the_mouth_moves_only_while_somebody_is_waiting() {
     assert_eq!(pirate.mark(), CHOMP_CYCLE[1]);
     pirate.tick();
     assert_eq!(pirate.mark(), CHOMP_CYCLE[2]);
+}
+
+#[test]
+fn a_bite_outlasts_an_answer_that_comes_straight_back() {
+    // The click is the whole of what the mouth acknowledges, and the request
+    // behind it is usually over before a frame has been drawn. A mouth that
+    // shut with the answer would be a click that drew nothing.
+    let mut pirate = reading();
+    pirate.run("panel");
+    let fetch = stub::taken().requests[0].0;
+
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 200,
+            body: USAGE.to_vec(),
+        },
+    );
+
+    let frames: Vec<&str> = (0..CHOMP_CYCLE.len())
+        .map(|_| {
+            stub::advance(CHOMP_MILLIS);
+            pirate.tick();
+            pirate.mark()
+        })
+        .collect();
+    assert_eq!(
+        frames,
+        vec!["pirate-open", "pirate-wide", "pirate-open", "pirate"],
+        "the mouth stopped the moment nobody was waiting on anything"
+    );
+
+    // And it does end. A bite that outlived its click would be an animation on
+    // a timer nobody is watching.
+    stub::advance(CHOMP_FOR);
+    let _ = stub::taken();
+    pirate.tick();
+    assert_eq!(pirate.mark(), PIRATE);
+    assert_eq!(
+        stub::taken().timers,
+        vec![COUNTDOWN_MILLIS as i32],
+        "the bite is over, so the only thing left to wake up for is the panel"
+    );
+}
+
+#[test]
+fn a_burst_that_runs_out_mid_bite_still_ends_on_a_shut_mouth() {
+    // The frame the burst happens to run out on is arbitrary — it is a wall
+    // clock against a request — and a pirate left frozen with his mouth wide
+    // open reads as a plugin that has crashed.
+    let mut pirate = reading();
+    pirate.run("panel");
+    let fetch = stub::taken().requests[0].0;
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 200,
+            body: USAGE.to_vec(),
+        },
+    );
+
+    pirate.tick();
+    pirate.tick();
+    assert_eq!(pirate.mark(), "pirate-wide", "two frames in, as set up");
+    stub::advance(CHOMP_FOR);
+
+    pirate.tick();
+    assert_eq!(pirate.mark(), "pirate-open", "it stopped on the wide face");
+    pirate.tick();
+    assert_eq!(pirate.mark(), PIRATE);
+}
+
+#[test]
+fn a_click_the_back_off_refuses_does_not_animate_either() {
+    // The mouth means somebody is waiting on an answer. Nothing went out, so
+    // nobody is, and a bite here would be the chip saying it is doing
+    // something it is not.
+    let mut pirate = reading();
+    pirate.run("panel");
+    let fetch = stub::taken().requests[0].0;
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 429,
+            body: Vec::new(),
+        },
+    );
+    stub::advance(CHOMP_FOR);
+    for _ in 0..CHOMP_CYCLE.len() {
+        pirate.tick();
+    }
+    pirate.run("dismiss");
+    let _ = stub::taken();
+
+    pirate.run("panel");
+
+    assert_eq!(pirate.mark(), PIRATE);
+    assert!(
+        stub::taken().timers.is_empty(),
+        "a click that asked for nothing booked an animation anyway"
+    );
 }
 
 #[test]
