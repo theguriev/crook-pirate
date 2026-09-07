@@ -47,6 +47,29 @@ use serde::{Deserialize, Serialize};
 /// counts: postcard encodes a variant by its index, so an older host reading a
 /// newer plugin's `Node` would read the wrong variant rather than fail.
 ///
+/// **7** is the version a plugin can act on **one command** in.
+/// [`Subject::Block`], which is what a render of a slot in a block's menu is
+/// about — the command line, how it ended and where it ran, each redacted
+/// against what a person granted, exactly as a tab row's facts are.
+/// [`Capability::ReadBlock`] is what un-redacts it, and
+/// [`Request::Output`] is the half a subject cannot afford to carry: what the
+/// command *printed* can be a megabyte, and a subject is built on every frame
+/// a menu is open, so the output is asked for once when an entry runs rather
+/// than copied sixty times a second at somebody who may never press anything.
+/// [`Request::Copy`] is the other addition, and the shortest way for a plugin
+/// to hand a person what it worked out.
+///
+/// **6** gave a plugin a field the keyboard can be in, and a menu on a
+/// secondary click.
+///
+/// **5** is the version a plugin can be *noticed* in.
+/// [`Capability::PlaySound`] and [`Capability::WatchCommands`], which together
+/// are a plugin that can ring when a command finishes; the
+/// [`Request::PlaySound`] that carries the audio itself rather than a path;
+/// [`Event`], the first thing the host says to a plugin that the plugin did
+/// not ask for; and [`Node::Explained`], which lets one hang what it would
+/// otherwise have to say permanently off the thing it is about.
+///
 /// **4** is the version a plugin can be asked the same question twice in. A
 /// render used to carry a slot name and nothing else, which is enough for a
 /// slot there is one of — the header has one right-hand end — and nothing at
@@ -71,7 +94,7 @@ use serde::{Deserialize, Serialize};
 /// behalf, and the six [`Node`] variants a panel needs. Version 1 could
 /// describe a badge and register an action, which is a plugin that can say
 /// what it already knew.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 7;
 
 /// What a sandboxed plugin says about itself, before any of it runs.
 ///
@@ -136,6 +159,69 @@ pub enum Capability {
     /// can be asked for at all: they are a directory of files whose names
     /// nobody knows in advance.
     ReadFiles(Vec<String>),
+    /// Make a sound, by handing the host the audio to play.
+    ///
+    /// The guest never reaches an audio device: it sends bytes with
+    /// [`Request::PlaySound`] and the host plays them, the same shape every
+    /// other request has. What is being granted is *interrupting a person* —
+    /// which is why it is a capability at all, and why the sentence says
+    /// "sound" rather than naming a device nobody has an opinion about.
+    PlaySound,
+    /// Be told when a command in a pane finishes.
+    ///
+    /// Not a sight of what ran: the event carries which pane and how it
+    /// exited, and no command line. Even so it is a capability, because when
+    /// somebody's commands finish and whether they failed is a picture of how
+    /// their day is going, and a plugin that could watch that unasked would be
+    /// one nobody had the chance to refuse.
+    WatchCommands,
+    /// List the *names* in a directory, and only under these roots.
+    ///
+    /// Names and whether each is a directory, never a byte of what is in one:
+    /// that is what makes this a weaker thing to grant than [`ReadFiles`] and
+    /// what lets it name a root rather than an exact path. "Read every file
+    /// under your home directory" is not a sentence anybody should agree to;
+    /// "see the names of the folders under your home directory" is what a
+    /// directory picker actually needs.
+    ///
+    /// A leading `~` is the person's home directory, as everywhere else, and a
+    /// path holding `..` is refused rather than resolved — a granted root
+    /// cannot be walked out of.
+    ///
+    /// [`ReadFiles`]: Self::ReadFiles
+    ListDirectories(Vec<String>),
+    /// Type a command into the shell, and only these commands.
+    ///
+    /// Templates rather than a flag, and this is the strongest thing on the
+    /// list: what a plugin types, the shell runs, as the person. So it is a
+    /// list of exact commands with one `{}` in each where the argument goes —
+    /// `cd {}`, `git switch {}` — the host fills the hole and quotes what goes
+    /// in it, and a plugin granted `cd {}` cannot type anything else. "This
+    /// plugin can run commands" is not a thing anybody can meaningfully agree
+    /// to; "this plugin can `cd` somewhere" is.
+    TypeCommands(Vec<String>),
+    /// Run one of Crook's own commands, and only these.
+    ///
+    /// By exact name, for the reason the network is a list of hosts. A plugin
+    /// that may ask for `crook/shortcuts/rebind` is a plugin that can offer
+    /// "change this keybinding" on its own chip; a plugin that may run any
+    /// command by name is a plugin that can close the window.
+    RunCommands(Vec<String>),
+    /// See what Crook can be asked to do, and which keys reach it.
+    ///
+    /// The command list and the chords bound to it, which is what a plugin
+    /// needs to print a hint — and nothing about what is in a pane.
+    ReadCommands,
+    /// Read the command a menu of this plugin's is open on: what was run, how
+    /// it ended, and what it printed.
+    ///
+    /// One command at a time, and only ever one a person pointed at: a plugin
+    /// with this sees the block whose menu they opened, for as long as it is
+    /// open, and has no way to name another or to ask about a session. What it
+    /// does *not* cover is where that command ran — a directory is a directory
+    /// wherever it is read, so that stays [`Capability::ReadWorkingDirectory`]
+    /// and a plugin that wants both asks for both.
+    ReadBlock,
 }
 
 impl Capability {
@@ -176,6 +262,19 @@ impl Capability {
                 }
                 sentence
             }
+            Self::PlaySound => "Play a sound".into(),
+            Self::WatchCommands => "Know when a command finishes".into(),
+            Self::ListDirectories(roots) => list_sentence("See the names of the files in ", roots),
+            Self::TypeCommands(templates) => {
+                let filled: Vec<String> = templates
+                    .iter()
+                    .map(|template| template.replace("{}", "\u{2026}"))
+                    .collect();
+                list_sentence("Type into your shell, and run: ", &filled)
+            }
+            Self::RunCommands(names) => list_sentence("Use Crook's own ", names),
+            Self::ReadCommands => "See what Crook can be asked to do, and the keys for it".into(),
+            Self::ReadBlock => "Read the command you run it on, and what it printed".into(),
         }
     }
 
@@ -203,6 +302,18 @@ impl Capability {
             Self::Clipboard => vec![String::from("clipboard")],
             Self::Storage => vec![String::from("storage")],
             Self::ReadFiles(paths) => paths.iter().map(|path| format!("file:{path}")).collect(),
+            Self::PlaySound => vec![String::from("sound.play")],
+            Self::WatchCommands => vec![String::from("commands.watch")],
+            Self::ListDirectories(roots) => {
+                roots.iter().map(|root| format!("list:{root}")).collect()
+            }
+            Self::TypeCommands(templates) => templates
+                .iter()
+                .map(|template| format!("type:{template}"))
+                .collect(),
+            Self::RunCommands(names) => names.iter().map(|name| format!("run:{name}")).collect(),
+            Self::ReadCommands => vec![String::from("commands.read")],
+            Self::ReadBlock => vec![String::from("block.read")],
         }
     }
 }
@@ -219,6 +330,12 @@ impl Capability {
 pub struct Render {
     /// The slot, by the name the plugin contributed to.
     pub slot: String,
+    /// This contribution's own name, as the plugin spelled it in `contribute`.
+    ///
+    /// A plugin may put four things in one list slot — a row of chips is
+    /// exactly that — and a render told only which slot it was in would have
+    /// to draw all four in each of them.
+    pub entry: String,
     /// What this render is about, for a slot that is drawn per thing, and
     /// `None` for a slot that is drawn once.
     pub subject: Option<Subject>,
@@ -226,14 +343,54 @@ pub struct Render {
 
 /// What one render is about.
 ///
-/// An enum with one variant, because the second is a matter of time — a slot
-/// per pane, a slot per block — and a plugin that matches on a subject this
-/// build does not have draws nothing rather than guessing, which is the rule
-/// an unknown slot name already follows.
+/// A plugin that matches on a subject this build does not have draws nothing
+/// rather than guessing, which is the rule an unknown slot name already
+/// follows. The one still missing is a slot per *pane*.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Subject {
     /// One row of the tab panel.
     Tab(TabFacts),
+    /// The command whose menu this is being drawn in.
+    Block(BlockFacts),
+}
+
+/// One command, as much of it as this plugin was allowed to see.
+///
+/// **Redacted rather than refused**, the way [`TabFacts`] is: a plugin granted
+/// nothing still gets a [`key`](Self::key) and is still drawn, because an
+/// entry that says "send this somewhere" is a thing somebody can want without
+/// the plugin being told what they ran.
+///
+/// What it does *not* carry is the output. That is [`Request::Output`], and
+/// the split is a cost rather than a policy: this is built on every frame a
+/// menu is open, and what a command printed can be a megabyte.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockFacts {
+    /// Which command this is, as a number that says nothing else.
+    ///
+    /// Two renders of one block carry the same key and two blocks never carry
+    /// one, which is what lets a plugin notice that the menu it is drawing in
+    /// is the one it was drawing in a frame ago. Salted with the asking
+    /// plugin's own id, as [`TabFacts::key`] is, and it says nothing about the
+    /// command: a block's key is handed out fresh per session and means
+    /// nothing tomorrow, because a command is not a place.
+    pub key: u64,
+    /// What was run and how it ended, or `None` without
+    /// [`Capability::ReadBlock`].
+    pub ran: Option<Ran>,
+    /// Where it ran, or `None` without [`Capability::ReadWorkingDirectory`] —
+    /// and `None` as well for a shell that never said.
+    pub place: Option<Place>,
+}
+
+/// What a command was and what became of it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ran {
+    /// The command line, as it was submitted or as the shell echoed it, or
+    /// `None` when neither happened.
+    pub command: Option<String>,
+    /// The status the shell reported, or `None` when it reported none.
+    pub exit: Option<i32>,
 }
 
 /// One row of the tab panel, as much of it as this plugin was allowed to see.
@@ -315,6 +472,24 @@ pub enum Status {
     NeedsInput,
     /// Stopped because something went wrong.
     Failed,
+}
+
+/// "Read a, b and c", built from a lead-in and the things granted.
+///
+/// One function rather than three copies of the same loop, and it is here
+/// rather than inline because every capability that is a *list* has to say the
+/// same shape of sentence: a person comparing what two plugins ask for is
+/// comparing two sentences, and two that are worded differently read as two
+/// different kinds of request.
+fn list_sentence(lead: &str, items: &[String]) -> String {
+    let mut sentence = String::from(lead);
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            sentence.push_str(", ");
+        }
+        sentence.push_str(item);
+    }
+    sentence
 }
 
 /// How much a piece of text matters, rather than what colour it is.
@@ -493,6 +668,119 @@ pub enum Node {
         /// The action a dismissal runs, without the plugin's own prefix.
         dismiss: String,
     },
+    /// Something with a note that appears while the pointer is on it.
+    ///
+    /// The other half of [`Anchored`], and the difference is state. A panel is
+    /// up because the plugin says so and shut because a click somewhere else
+    /// told it; a note is up exactly while the pointer is on the thing, which
+    /// is not a fact anybody has to remember. So this names no action in
+    /// either direction: the host never asks whether to show it and never says
+    /// that it did, and a plugin that has stopped answering cannot leave one
+    /// on screen.
+    ///
+    /// Which is also why the note is described on every frame rather than
+    /// fetched on the one the pointer arrives. A note whose words arrived only
+    /// then would be a call into the guest at pointer speed, on the thread
+    /// that draws, to say something the plugin already knew.
+    ///
+    /// [`Anchored`]: Self::Anchored
+    Explained {
+        /// What is drawn.
+        content: Box<Node>,
+        /// What appears above it while the pointer is on it.
+        explanation: Box<Node>,
+    },
+    /// A list to choose from, with a field over it.
+    ///
+    /// The one node here the *host* drives rather than draws. A plugin
+    /// supplies the rows and is told which one was chosen; the field, the
+    /// filtering, the arrow keys, Enter, Escape, the hover and the scroll all
+    /// belong to Crook. That is not a convenience — it is the only way a
+    /// sandboxed plugin can have a search box at all. A plugin given the
+    /// keyboard would be a plugin that reads what is typed in the window it
+    /// is a chip in, and a plugin that filtered its own list would cost a
+    /// call into the sandbox on every keystroke, on the thread that draws.
+    ///
+    /// So the plugin says what can be chosen and the host says what a person
+    /// chose, which is the same bargain as [`Meter`]: describe the reading,
+    /// not the pixels.
+    ///
+    /// **What is typed is never handed over.** The rows are what the plugin
+    /// offered and the filtering is the host's, so a picker cannot be a way of
+    /// reading what somebody is typing in the window it is a chip in. A picker
+    /// whose rows change with the query — a search somebody else answers — is
+    /// a thing this cannot describe, and it stays that way until something
+    /// needs it: a variant nobody uses is a variant that has to keep working
+    /// for ever.
+    ///
+    /// [`Meter`]: Self::Meter
+    Picker {
+        /// What the field says while nothing has been typed.
+        placeholder: String,
+        /// Everything that can be chosen, in the order it is offered. The host
+        /// keeps that order and shows the ones matching what has been typed.
+        rows: Vec<Row>,
+        /// The action a chosen row runs, without the plugin's own prefix. The
+        /// row's own [`key`](Row::key) arrives as the action's argument.
+        choose: String,
+    },
+    /// A mark and a word in a quiet pill: what a chip beside a prompt is.
+    ///
+    /// Not a [`Badge`], which is a *reading* — a filled pill in a tone, for a
+    /// percentage or a count, and loud on purpose. This is the other one: the
+    /// theme's own raised ground and a hairline, for a fact about where you
+    /// are. Warp draws both and so does Crook, and a plugin that had to build
+    /// one out of a row and a container would be a plugin drawing a pill the
+    /// wrong shape beside the application's own.
+    ///
+    /// [`Badge`]: Self::Badge
+    Chip {
+        /// A Lucide name in front of the text, or empty for none.
+        icon: String,
+        /// What it says.
+        text: String,
+        /// Which of the theme's tones the text and the mark take. The ground
+        /// is the theme's, not the tone's: a chip is not a reading.
+        tone: Tone,
+    },
+    /// Something with a menu on its secondary click.
+    ///
+    /// The gesture every desktop opens a context menu with, and the host draws
+    /// the menu: a plugin that had to draw one would be a plugin whose menu is
+    /// the wrong shape beside the one a tab opens.
+    Menu {
+        /// What is drawn, and what the secondary click lands on.
+        content: Box<Node>,
+        /// What the menu offers, in order.
+        items: Vec<MenuItem>,
+    },
+}
+
+/// One thing a [`Node::Picker`] offers.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Row {
+    /// What the plugin is told when this row is chosen. Never shown.
+    pub key: String,
+    /// What the row says, and what the host filters on.
+    pub label: String,
+    /// A Lucide name drawn in front of the label, as [`Node::Icon`] resolves
+    /// one; empty for a row with nothing in front of it.
+    pub icon: String,
+    /// Which of the theme's tones the label takes.
+    pub tone: Tone,
+}
+
+/// One entry of a [`Node::Menu`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuItem {
+    /// What it says.
+    pub label: String,
+    /// The action it runs, without the plugin's own prefix.
+    pub action: String,
+    /// What that action is handed, or empty for an action with nothing to say
+    /// to it. Here rather than in the name so that one action can serve every
+    /// entry of a menu built out of something the plugin was told.
+    pub argument: String,
 }
 
 /// Something a plugin asks the host to do on its behalf.
@@ -583,6 +871,98 @@ pub enum Request {
         /// plugin wanting totals by day *and* by author would otherwise pay
         /// for the hundred megabytes twice.
         tables: Vec<Table>,
+    },
+    /// Play a sound. Needs [`Capability::PlaySound`].
+    ///
+    /// The audio travels rather than a path, because a plugin's own chime is
+    /// something it ships and not something on the machine: sending bytes
+    /// costs it no [`Capability::ReadFiles`] over its own directory, and the
+    /// host never resolves a name a guest chose into a file it then opens.
+    ///
+    /// One format, `wav`: the host does not decode audio and has no library
+    /// that could, so what it can hand a player is what every player on every
+    /// platform already reads. Anything else is [`Answer::Failed`].
+    PlaySound {
+        /// A RIFF/WAVE file, whole, as it would sit on disk.
+        wav: Vec<u8>,
+        /// How loud, 0 to 100. Clamped, and best effort: some players cannot
+        /// be told, and the host would rather play at their volume than not
+        /// play.
+        volume: u8,
+    },
+    /// Where the active pane is, and what git says about it. Needs
+    /// [`Capability::ReadWorkingDirectory`].
+    Where,
+    /// The names in one directory. Needs [`Capability::ListDirectories`]
+    /// naming a root this path is inside.
+    ///
+    /// Names and kinds, never contents, and one directory rather than a walk:
+    /// a plugin that could ask for a tree is a plugin that can be handed a
+    /// hundred thousand names for asking once.
+    List {
+        /// The directory to read. A leading `~` is the person's home.
+        path: String,
+    },
+    /// What the repository a directory is in has: its head, and its branches.
+    /// Needs [`Capability::ReadWorkingDirectory`].
+    ///
+    /// Answered by the host's own git rather than by handing a plugin the
+    /// repository to read for itself, which would be a grant worded "read
+    /// everything you have ever written".
+    Repository {
+        /// A directory inside the repository, or the repository itself.
+        path: String,
+    },
+    /// Type a command into the active pane's shell, and run it. Needs
+    /// [`Capability::TypeCommands`] naming exactly this template.
+    ///
+    /// The template is the granted string, with one `{}` where the argument
+    /// goes; the host fills it and quotes what it fills it with, so a branch
+    /// called `;rm -rf ~` is a branch name and not a second command. What the
+    /// shell then does with the line is the shell's own business, which is the
+    /// point: `cd` is the shell's, and so are its aliases and its hooks.
+    ///
+    /// Only from an action a person ran. A request raised while describing or
+    /// on a timer of the plugin's own is refused, because a plugin that can
+    /// type without being clicked is a plugin that types while nobody is
+    /// looking.
+    Type {
+        /// The template, exactly as it was granted.
+        template: String,
+        /// What goes in the hole.
+        argument: String,
+    },
+    /// Run one of Crook's own commands. Needs [`Capability::RunCommands`]
+    /// naming exactly this one.
+    Run {
+        /// The command's full name, as the Keyboard Shortcuts page prints it.
+        name: String,
+        /// What it is handed, or empty for a command that takes nothing.
+        argument: String,
+    },
+    /// Everything Crook can be asked to do, and the chord that reaches each.
+    /// Needs [`Capability::ReadCommands`].
+    Commands,
+    /// What the command printed, for the block a menu of this plugin's is open
+    /// on. Needs [`Capability::ReadBlock`].
+    ///
+    /// The half [`Subject::Block`] cannot afford to carry: a subject is built
+    /// on every frame a menu is up, and output can be a megabyte. So it is
+    /// asked for — once, by an entry somebody pressed, which is the only
+    /// moment a plugin has any business with it.
+    ///
+    /// Only from an action a person ran, for the reason [`Request::Type`] is:
+    /// a request raised while describing, or on a timer of the plugin's own,
+    /// is about a block nobody pointed it at and comes back [`Answer::Failed`].
+    Output,
+    /// Put text on the system clipboard. Needs [`Capability::Clipboard`].
+    ///
+    /// A request rather than something a [`Node`] could describe, because what
+    /// goes on a clipboard is a thing that *happens*, at a moment, because
+    /// somebody asked — not a thing that is drawn.
+    Copy {
+        /// What to put there.
+        text: String,
     },
 }
 
@@ -703,6 +1083,123 @@ pub enum Answer {
     Refused(String),
     /// It was granted and attempted, and did not work.
     Failed(String),
+    /// The sound was handed to a player, which is as far as this goes.
+    ///
+    /// Not "the person heard it": the host spawns a player and does not wait
+    /// for it, so what it can honestly report is that something took the
+    /// audio. A plugin that rings twice because it disbelieved this answer
+    /// would be worse than one that trusts it.
+    Played,
+    /// Where the active pane is.
+    ///
+    /// `place` is `None` for a pane whose shell has not said where it is,
+    /// which is the state every pane is in for a moment after it opens.
+    Where {
+        /// Where it is working, said the way a tab row's own place is.
+        place: Option<Place>,
+        /// The person's home directory.
+        ///
+        /// Here because a chip prints `~/Work/crook` and a plugin cannot know
+        /// which prefix that is — and because the alternative, handing over a
+        /// path already shortened, would be handing over one that cannot be
+        /// `cd`-ed to. It reveals nothing the directory beside it does not.
+        home: Option<String>,
+        /// Lines added in the working tree against `HEAD`, and lines removed.
+        ///
+        /// Zero for a directory git has said nothing about, because the wire
+        /// has no third answer and "nothing changed" is what a chip would
+        /// print either way.
+        added: u32,
+        /// See [`added`](Self::Where::added).
+        removed: u32,
+    },
+    /// What is in a directory, in the order the host sorted it: directories
+    /// first, then files, each by name.
+    Listed(Vec<Entry>),
+    /// What a repository has.
+    Repository {
+        /// The branch its head is on, or the short sha of a detached head, or
+        /// `None` for a path that is not in a repository at all.
+        head: Option<String>,
+        /// Every branch it has, in the order git lists them.
+        branches: Vec<String>,
+    },
+    /// What Crook can be asked to do.
+    Commands(Vec<Command>),
+    /// It was granted, attempted and did what it said.
+    ///
+    /// What a request that *changes* something answers with: there is nothing
+    /// to hand back, and "nothing came back" and "it worked" have to be
+    /// different answers or a plugin cannot tell them apart.
+    Done,
+    /// What the command printed, without the prompt or the line it was typed
+    /// on.
+    ///
+    /// Empty for a command that printed nothing, which is a different thing
+    /// from a block whose shell never said where its output began — that is
+    /// [`Answer::Failed`], because a plugin handed an empty string would put an
+    /// empty fence on somebody's clipboard and never know why.
+    Output {
+        /// The rows, joined by newlines, with the blank ones at the end
+        /// trimmed off.
+        text: String,
+    },
+}
+
+/// Something that happened, which a plugin asked to be told about.
+///
+/// The other direction from [`Request`], and the only one there is: a guest
+/// still never reaches anything. The host calls `crook_event` off the frame
+/// path with one of these, on the plugins whose capabilities cover it, and a
+/// plugin that exports no `crook_event` is simply not called.
+///
+/// Deliberately small, and for the reason [`Node`] is: every variant has to be
+/// something Crook already knows, described in terms a plugin can act on
+/// without being told anything about the person using it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Event {
+    /// A command in a pane finished. Needs [`Capability::WatchCommands`].
+    ///
+    /// This is OSC 133 `D` — the shell saying it is done — so it arrives for
+    /// every shell Crook's integration is installed in, and not at all in one
+    /// where it is not. What ran is *not* here: a plugin that wanted to ring
+    /// when something finished does not need the command line, and a plugin
+    /// that had it would be reading somebody's history.
+    CommandFinished {
+        /// Which pane, stable for as long as the pane is open. A plugin that
+        /// keeps state per pane can key on it; it means nothing across runs.
+        pane: u64,
+        /// How it exited, or `None` when the shell reported no status.
+        exit: Option<u8>,
+        /// How long it ran, in milliseconds, or `None` when the boundary that
+        /// started it was never seen.
+        ///
+        /// Here because "ring only for the slow ones" is the first thing
+        /// anybody wants from this and the host is the only side that can
+        /// measure it.
+        took_millis: Option<u64>,
+    },
+}
+
+/// One name in a directory.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entry {
+    /// The name alone, with no path in front of it.
+    pub name: String,
+    /// Whether it is a directory.
+    pub directory: bool,
+}
+
+/// One thing Crook can be asked to do.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Command {
+    /// Its full name, which is what a keybindings file writes.
+    pub name: String,
+    /// What a person calls it.
+    pub title: String,
+    /// The chord that reaches it, as the Keyboard Shortcuts page prints it, or
+    /// `None` for a command nothing is bound to.
+    pub chord: Option<String>,
 }
 
 /// A gap, in units rather than pixels.

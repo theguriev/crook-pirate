@@ -344,9 +344,7 @@ impl Pirate {
             Answer::Failed(_) => self.settle(Some(Problem::NoSession)),
             // The host answering a file read with something else would be a
             // bug in the host, and there is nothing useful to draw about it.
-            Answer::Fetched { .. } | Answer::Counted { .. } => {
-                self.settle(Some(Problem::Unreachable))
-            }
+            _ => self.settle(Some(Problem::Unreachable)),
         }
     }
 
@@ -375,12 +373,10 @@ impl Pirate {
             // person who can see 503 knows more than one who is told the
             // network failed.
             Answer::Fetched { status, .. } => self.settle(Some(Problem::Returned(status))),
-            // The host answering a fetch with a file or a tally would be a bug
-            // in the host, and there is nothing useful to draw about it.
-            Answer::Failed(_) | Answer::Read { .. } | Answer::Counted { .. } => {
-                self.settle(Some(Problem::Unreachable));
-            }
             Answer::Refused(sentence) => self.settle(Some(Problem::NotAllowed(sentence))),
+            // The host answering a fetch with anything else would be a bug in
+            // the host, and there is nothing useful to draw about it.
+            _ => self.settle(Some(Problem::Unreachable)),
         }
     }
 
