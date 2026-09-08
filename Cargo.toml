@@ -11,7 +11,10 @@ repository = "https://github.com/theguriev/crook-pirate"
 publish = false
 
 [workspace.dependencies]
-crook_plugin_api = { path = "crates/crook_plugin_api" }
+# The published vocabulary rather than a copy of it. `0.8` is Cargo's way of
+# writing "plugin ABI 8": the crate is versioned `0.<abi>.<patch>`, and a host
+# loads one ABI and refuses every other by name.
+crook_plugin_api = "0.8"
 
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }

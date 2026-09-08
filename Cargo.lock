@@ -13,7 +13,9 @@ dependencies = [
 
 [[package]]
 name = "crook_plugin_api"
-version = "0.3.0"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51aa77c445d3532bd34c3e076743779f662d62172bd27d99c3a22a100862648d"
 dependencies = [
  "postcard",
  "serde",
