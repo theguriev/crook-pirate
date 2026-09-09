@@ -1,15 +1,18 @@
-//! Reading a timestamp, and saying how long is left of one.
+//! Reading a timestamp, saying how long is left of one, and naming the day a
+//! column of the chart stands for.
 //!
 //! A plugin has a clock — the host hands it the milliseconds since the epoch —
-//! and nothing else. There is no calendar in a sandbox, so the two things a
-//! countdown needs are here: turning the RFC 3339 stamp Anthropic answers with
-//! into that same number, and turning the difference into the four words a
-//! panel has room for.
+//! and nothing else. There is no calendar in a sandbox, so what a countdown
+//! needs is here: turning the RFC 3339 stamp Anthropic answers with into that
+//! same number, writing one back, and turning a difference into the four words
+//! a panel has room for. And one letter for a weekday, from a day number the
+//! machine's own offset has already been applied to — see
+//! [`crate::history`], which is where the zone is handled.
 //!
 //! Written out rather than taken from a date library because a date library is
-//! a hundred kilobytes of a plugin somebody downloads, and this needs exactly
-//! two operations, neither of which involves a time zone: the stamp is UTC and
-//! so is the clock.
+//! a hundred kilobytes of a plugin somebody downloads, and this needs a
+//! handful of operations, none of which needs a calendar of its own: the stamp
+//! is UTC and so is the clock, and a weekday is arithmetic on a day number.
 
 /// Milliseconds since the epoch for an RFC 3339 stamp, or `None` for anything
 /// this does not recognise.
@@ -164,9 +167,36 @@ pub fn format_countdown(remaining_millis: i64) -> String {
     }
 }
 
+/// The initial of the weekday a local day number falls on.
+///
+/// A day number is days since the epoch in the machine's own zone, which is
+/// what [`crate::history`] keys the chart's columns by, and the epoch was a
+/// Thursday. One letter rather than three because seven of them have to sit
+/// under seven columns thirteen pixels wide: Tuesday and Thursday share a T
+/// and the weekend an S, which is what every calendar this narrow does.
+pub fn weekday_initial(day: i64) -> &'static str {
+    const INITIALS: [&str; 7] = ["M", "T", "W", "T", "F", "S", "S"];
+    // 1970-01-01 was a Thursday, three days on from the Monday the table
+    // starts at. Euclidean, so a day before the epoch lands on a letter
+    // rather than on a negative index.
+    INITIALS[(day + 3).rem_euclid(7) as usize]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_epoch_was_a_thursday_and_the_days_around_it_agree() {
+        assert_eq!(weekday_initial(0), "T");
+        // 1970-01-05, the first Monday.
+        assert_eq!(weekday_initial(4), "M");
+        // 1969-12-31, a Wednesday: the day before the epoch is not an
+        // out-of-range index.
+        assert_eq!(weekday_initial(-1), "W");
+        // 2026-09-04, the Friday the stub's clock is set to.
+        assert_eq!(weekday_initial(20_700), "F");
+    }
 
     #[test]
     fn the_epoch_is_where_everything_is_measured_from() {

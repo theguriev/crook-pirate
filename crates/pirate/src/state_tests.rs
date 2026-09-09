@@ -538,8 +538,8 @@ fn a_click_asks_to_be_woken_sooner_and_asks_once() {
 #[test]
 fn the_bite_ending_does_not_book_a_second_heartbeat() {
     // Coming back the other way: the answer lands, the mouth shuts, and what
-    // is left to wake up for is the countdown under the bars — which is
-    // further off than the frame already booked, so nothing is asked for.
+    // is left to wake up for is the countdowns — which are further off than
+    // the frame already booked, so nothing is asked for.
     let mut pirate = reading();
     pirate.run("panel");
     let fetch = stub::taken().requests[0].0;

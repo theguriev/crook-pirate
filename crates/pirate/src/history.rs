@@ -200,6 +200,11 @@ pub struct Week {
     /// in a chart has to be a column of no height rather than a missing one,
     /// or the chart says the week was shorter than it was.
     pub days: Vec<u64>,
+    /// Which day the first of those is, as a local day number: what turns a
+    /// column into a weekday. Kept with the columns rather than worked out
+    /// again when they are drawn, because the panel can be open across
+    /// midnight and the columns do not move when the clock does.
+    pub first_day: i64,
     /// The busiest projects, heaviest first, at most [`TOP_PROJECTS`].
     pub projects: Vec<Project>,
     /// How many distinct sessions were open in the window.
@@ -402,6 +407,7 @@ impl Reading {
             turns: models.iter().map(|model| model.turns).sum(),
             models,
             days,
+            first_day: self.first_day,
             projects,
             // One row per session that answered, which is what a session is.
             sessions: rows(&tables, BY_SESSION).count() as u64,
@@ -453,8 +459,10 @@ fn tokens(row: &Tallied) -> u64 {
 /// Which day an instant falls on, in the machine's own time zone.
 ///
 /// A day number rather than a date, because nothing here prints one: the chart
-/// is seven columns in order and the only question asked of a timestamp is
-/// which column it belongs in. The offset is the one in force *now* rather
+/// is seven columns in order, and what a timestamp is asked is which column it
+/// belongs in. Days since the epoch, so that the same number says which
+/// weekday the column is — see [`crate::time::weekday_initial`] — without
+/// anything here knowing what a date looks like. The offset is the one in force *now* rather
 /// than the one in force then, which is wrong for the day the clocks go back
 /// and right for the other three hundred and sixty four.
 fn day_of(millis: i64) -> i64 {
