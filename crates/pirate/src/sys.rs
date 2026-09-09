@@ -1,6 +1,6 @@
 //! The doors out of the sandbox, and the stubs that stand in for them.
 //!
-//! A plugin has six imports and no other way to affect anything. They are
+//! A plugin has seven imports and no other way to affect anything. They are
 //! wrapped here rather than called from the logic, for one reason: everything
 //! in this crate except this file then builds and runs on an ordinary machine,
 //! so the state machine that decides when to refresh and what to draw is

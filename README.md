@@ -10,7 +10,8 @@ the current Claude Code session budget is spent.
 
 Click him and a panel drops out with the limits behind that number — the rolling five-hour
 window and the weekly one, each with a bar and the time left on it — and then the week behind
-*those*: a column per day, what each model was used for, and which projects it went on.
+*those*: a column per day with its weekday under it, what each model was used for, and which
+projects it went on.
 
 Opening that panel is also the only thing that refreshes the number. There is no background
 poll and no Refresh button: the endpoint the limits come from has a budget small enough that
@@ -19,7 +20,7 @@ refreshed itself once a minute in a window nobody was looking at spent that budg
 and what it drew for it was "asked too often". So the percentage you see is the one the last
 opening got, and it is exactly as old as it looks.
 
-<img src="assets/panel.png" alt="The panel: Session 47% and Week 62% with bars and countdowns; a chart of the last 7 days; Opus 5, Fable 5.1 and Haiku 4.5 with their tokens and shares; the busiest projects with their branches; 22,431 turns across 57 sessions" width="420">
+<img src="assets/panel.png" alt="The panel: Session 47% and Week 37% with bars and countdowns; a chart of the last 7 days with a weekday under each column and 5.3B tokens over it; Opus 5, Fable 5.1, Opus 4.8 and Haiku 4.5 with their shares and tokens; the busiest projects with their branches; 25,660 turns across 72 sessions" width="280">
 
 The limits come from Anthropic. The week comes from the transcripts Claude Code writes on this
 machine — three hundred megabytes of them — and none of it crosses into the sandbox: the
@@ -83,7 +84,7 @@ what your own account has spent. Nothing is sent anywhere else and nothing is st
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo test                                             # 76 tests, no wasm toolchain needed
+cargo test                                             # 77 tests, no wasm toolchain needed
 cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
 ```
@@ -93,18 +94,34 @@ when to ask, what to remember, what to draw — is tested by `cargo test` rather
 installing it and watching a terminal. The imports are stubbed there and answer from a clock
 the tests set.
 
+The same arrangement takes the panel's picture. What a describing plugin draws is a value, and
+`examples/fixture.rs` prints it — the tree the host is handed, carried to a reading and a
+week that are the same on every machine — in the form Crook's `--plugin-fixture` reads:
+
+```sh
+cargo run --example fixture > panel.json               # or: fixture expired | stale | danger | quiet | reading
+crook --plugin-fixture panel.json --snapshot panel.png
+```
+
+`--snapshot` writes the whole window; `assets/panel.png` is its top-right corner, cropped to the
+panel. So the picture above is a picture of what the code draws, taken by the host's own
+renderer, and a change to how a meter looks changes it with everybody's. The other scenes are the states
+nobody can arrange on demand: a session that has expired, a reading the last refresh could
+not replace, both bands lit, a week with nothing in it, and the transcripts still being read.
+
 ## How it is put together
 
 | | |
 | --- | --- |
 | `crates/pirate/src/lib.rs` | The ABI: every export Crook calls, each three lines, none of which decides anything. |
-| `crates/pirate/src/sys.rs` | The six imports, and the stubs that stand in for them off wasm. |
+| `crates/pirate/src/sys.rs` | The seven imports, and the stubs that stand in for them off wasm. |
 | `crates/pirate/src/state.rs` | When to ask — which is when you open the panel — what to remember, and what a person is waiting on. |
 | `crates/pirate/src/claude.rs` | The two JSON shapes: the credentials file and the usage endpoint. |
 | `crates/pirate/src/history.rs` | What to have counted out of the transcripts, and what the totals mean. |
 | `crates/pirate/src/view.rs` | The chip and the panel, as a tree Crook paints. |
+| `crates/pirate/examples/fixture.rs` | That tree, printed for the host's `--plugin-fixture`, in six states. |
 | `crates/pirate/src/time.rs` | Reading a timestamp and saying how long is left, without a date library. |
-| `crates/crook_plugin_api/` | A **copy** of Crook's own ABI crate. See the note in its `Cargo.toml`. |
+| `Cargo.toml` | Where the vocabulary comes from: the published `crook_plugin_api` crate, and why `0.8` means "ABI 8". |
 
 The plugin never names a colour, a pixel or a font. It says *what a thing is* — a mark, a
 number, a meter, a note — and Crook decides what that looks like in whatever theme is in

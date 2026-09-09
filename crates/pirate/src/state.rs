@@ -76,7 +76,8 @@ pub const CHOMP_MILLIS: i64 = 110;
 /// How often an open panel is redrawn.
 ///
 /// Nothing is asked of Anthropic on this timer and nothing changes because of
-/// it. It exists for the line under each bar — "resets in 40m" — which is
+/// it. It exists for the countdown beside each limit's name — "resets in
+/// 40m" — which is
 /// worked out from the clock at the moment it is drawn, and which would
 /// otherwise sit at the minute the panel happened to open while somebody
 /// watched it.

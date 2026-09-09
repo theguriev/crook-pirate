@@ -25,8 +25,13 @@ fn tallied(key: &[&str], tokens: [f64; 4], lines: u64) -> Tallied {
 
 /// A week out of four tables, as the host would answer.
 fn week_of(tables: Vec<Vec<Tallied>>) -> Week {
+    week_at(NOW, tables)
+}
+
+/// The same, with the clock somewhere else.
+fn week_at(now: i64, tables: Vec<Vec<Tallied>>) -> Week {
     stub::forget();
-    stub::set_now(NOW);
+    stub::set_now(now);
     stub::set_timezone(180);
     let mut reading = Reading::start();
     let _ = stub::taken();
@@ -78,6 +83,19 @@ fn an_hour_belongs_to_the_day_the_person_lived() {
     assert_eq!(week.days.len(), DAYS as usize);
     let busy: Vec<u64> = week.days.iter().copied().filter(|day| *day > 0).collect();
     assert_eq!(busy.len(), 2, "{:?}", week.days);
+}
+
+#[test]
+fn the_first_column_is_six_days_before_the_day_the_person_is_living() {
+    // Ten at night on a Friday, UTC, three hours east: one in the morning on
+    // Saturday for the person at the keyboard. The window is *their* day and
+    // the six behind it, so the first column is Sunday's — UTC would have
+    // said Saturday's, and drawn a chart whose last column is yesterday.
+    let week = week_at(NOW + 4 * 3_600_000, vec![Vec::new(); 4]);
+
+    assert_eq!(week.first_day, 20_701 - 6);
+    assert_eq!(crate::time::weekday_initial(week.first_day), "S");
+    assert_eq!(crate::time::weekday_initial(week.first_day + DAYS - 1), "S");
 }
 
 #[test]
