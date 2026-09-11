@@ -4,9 +4,10 @@
 //! the file, be handed it, ask for the reading, be handed that — runs here in
 //! microseconds and is asserted rather than watched.
 //!
-//! The rule most of these are about: **only a click asks.** A build asks for
-//! nothing, a tick asks for nothing, and the one thing that can refuse a click
-//! is a rate limit that has not finished.
+//! The rule most of these are about: **a build asks once, and after that
+//! only a click asks.** A tick asks for nothing, the build's request moves no
+//! mouth because nobody is waiting on it, and the one thing that can refuse a
+//! click is a rate limit that has not finished.
 
 use super::*;
 
@@ -22,8 +23,10 @@ const USAGE: &[u8] = br#"{"five_hour":{"utilization":47.4,"resets_at":"2026-09-0
 /// A plugin that has built and been clicked once, with the ticket the
 /// credentials read will answer with.
 ///
-/// The transcripts it also asked for are left unanswered. No test below is
-/// about the chart, and a scan still walking is what one looks like.
+/// That read is the one the build started: the click finds it in flight and
+/// starts no second one. The transcripts the click asked for are left
+/// unanswered. No test below is about the chart, and a scan still walking is
+/// what one looks like.
 fn opened() -> (Pirate, i32) {
     stub::forget();
     let mut pirate = Pirate::new();
@@ -67,7 +70,7 @@ fn reading() -> Pirate {
 }
 
 #[test]
-fn building_registers_the_chip_and_asks_for_nothing() {
+fn building_registers_the_chip_and_asks_once_with_a_shut_mouth() {
     stub::forget();
     let mut pirate = Pirate::new();
 
@@ -86,16 +89,53 @@ fn building_registers_the_chip_and_asks_for_nothing() {
             (String::from("dismiss"), String::new()),
         ]
     );
+    // One request — the chip has to say a number before anybody clicks it —
+    // and it starts with the file, because a fresh plugin has no token.
     assert!(
-        asked.requests.is_empty(),
-        "a plugin nobody has clicked must not spend a request: {:?}",
+        matches!(asked.requests.as_slice(), [(_, Request::ReadFile { .. })]),
+        "a build asks for the credentials once and nothing else: {:?}",
         asked.requests
     );
-    assert!(
-        asked.timers.is_empty(),
-        "and must not wake up to do it later either: {:?}",
-        asked.timers
+    // Nobody is waiting on it, so the mouth does not move: the only wake-up
+    // booked is the watchdog that frees the cycle if no answer comes.
+    assert_eq!(pirate.mark(), PIRATE);
+    assert_eq!(
+        asked.timers,
+        vec![GIVE_UP_WAITING_AFTER as i32],
+        "a build's request is nobody waiting, so it buys no bite"
     );
+    stub::advance(CHOMP_MILLIS);
+    pirate.tick();
+    assert_eq!(
+        pirate.mark(),
+        PIRATE,
+        "and a tick over it is not a frame of one"
+    );
+}
+
+#[test]
+fn a_click_while_the_build_is_still_asking_waits_on_that_answer() {
+    // The build's request is in flight; a click starts no second one — the
+    // endpoint's budget is the whole reason there is no poll — but the person
+    // who clicked is now waiting on it, and that is what the mouth means.
+    stub::forget();
+    let mut pirate = Pirate::new();
+    pirate.build();
+    let _ = stub::taken();
+
+    pirate.run("panel");
+
+    let asked = stub::taken();
+    assert!(
+        !asked.requests.iter().any(|(_, request)| matches!(
+            request,
+            Request::ReadFile { .. } | Request::Fetch { .. }
+        )),
+        "a click over a cycle in flight asked Anthropic again: {:?}",
+        asked.requests
+    );
+    assert_eq!(pirate.mark(), CHOMP_CYCLE[0]);
+    assert_eq!(asked.timers, vec![CHOMP_MILLIS as i32]);
 }
 
 #[test]
@@ -139,9 +179,27 @@ fn a_reading_that_lands_is_what_the_chip_then_says() {
 
 #[test]
 fn opening_the_panel_asks_and_putting_it_away_does_not() {
+    // With the build's own request answered first, so that what the opening
+    // asks for is the opening's.
     stub::forget();
     let mut pirate = Pirate::new();
     pirate.build();
+    let credentials = stub::taken().requests[0].0;
+    pirate.deliver(
+        credentials,
+        Answer::Read {
+            bytes: CREDENTIALS.to_vec(),
+        },
+    );
+    let fetch = stub::taken().requests[0].0;
+    pirate.deliver(
+        fetch,
+        Answer::Fetched {
+            status: 200,
+            body: USAGE.to_vec(),
+        },
+    );
+    let _ = stub::taken();
 
     pirate.run("panel");
     let opening = stub::taken().requests.len();
@@ -585,14 +643,15 @@ fn an_answer_nothing_is_waiting_on_changes_nothing() {
 }
 
 #[test]
-fn building_again_forgets_everything_and_asks_for_nothing() {
+fn building_again_forgets_everything_and_asks_once_more() {
     // The host builds a plugin again when it is switched back on, when a
     // person answers what it asked to be allowed, and every time it starts.
     // Whatever the previous life was waiting on — a timer nobody will fire
-    // again, a ticket nobody will answer — has to go. What must *not* replace
-    // it is a request: a build that asked would be a plugin spending one of a
-    // small budget on every restart, which is how it came to say "asked too
-    // often" for a living.
+    // again, a ticket nobody will answer — has to go, and so does the number,
+    // which the new life then asks for exactly once: the second of those
+    // builds is the one where the first request was refused and can now be
+    // answered, and a chip that stayed at "not allowed" after being allowed
+    // would look broken.
     let mut pirate = reading();
     pirate.run("panel");
     let _ = stub::taken();
@@ -602,14 +661,14 @@ fn building_again_forgets_everything_and_asks_for_nothing() {
 
     let asked = stub::taken();
     assert!(
-        asked.requests.is_empty(),
-        "a rebuild asked Anthropic something nobody clicked for: {:?}",
+        matches!(asked.requests.as_slice(), [(_, Request::ReadFile { .. })]),
+        "a rebuild asks for the number once, from the file: {:?}",
         asked.requests
     );
-    assert!(
-        asked.timers.is_empty(),
-        "and booked a tick with nothing to do on it: {:?}",
-        asked.timers
+    assert_eq!(
+        asked.timers,
+        vec![GIVE_UP_WAITING_AFTER as i32],
+        "and books nothing but the watchdog over it"
     );
     assert_eq!(pirate.usable_reading(), None);
     assert_eq!(pirate.mark(), PIRATE);

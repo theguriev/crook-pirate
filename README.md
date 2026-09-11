@@ -13,12 +13,12 @@ window and the weekly one, each with a bar and the time left on it — and then 
 *those*: a column per day with its weekday under it, what each model was used for, and which
 projects it went on.
 
-Opening that panel is also the only thing that refreshes the number. There is no background
-poll and no Refresh button: the endpoint the limits come from has a budget small enough that
-a handful of requests spends it, and it is shared with Claude Code itself. A chip that
-refreshed itself once a minute in a window nobody was looking at spent that budget on nobody,
-and what it drew for it was "asked too often". So the percentage you see is the one the last
-opening got, and it is exactly as old as it looks.
+The number is asked for once when Crook starts, and after that only when the panel opens.
+There is no background poll and no Refresh button: the endpoint the limits come from has a
+budget small enough that a handful of requests spends it, and it is shared with Claude Code
+itself. A chip that refreshed itself once a minute in a window nobody was looking at spent
+that budget on nobody, and what it drew for it was "asked too often". So the percentage you
+see is the one the start or the last opening got, and it is exactly as old as it looks.
 
 <img src="assets/panel.png" alt="The panel: Session 47% and Week 37% with bars and countdowns; a chart of the last 7 days with a weekday under each column and 5.3B tokens over it; Opus 5, Fable 5.1, Opus 4.8 and Haiku 4.5 with their shares and tokens; the busiest projects with their branches; 25,660 turns across 72 sessions" width="280">
 
@@ -84,7 +84,7 @@ what your own account has spent. Nothing is sent anywhere else and nothing is st
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo test                                             # 77 tests, no wasm toolchain needed
+cargo test                                             # 78 tests, no wasm toolchain needed
 cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
 ```
@@ -115,7 +115,7 @@ not replace, both bands lit, a week with nothing in it, and the transcripts stil
 | --- | --- |
 | `crates/pirate/src/lib.rs` | The ABI: every export Crook calls, each three lines, none of which decides anything. |
 | `crates/pirate/src/sys.rs` | The seven imports, and the stubs that stand in for them off wasm. |
-| `crates/pirate/src/state.rs` | When to ask — which is when you open the panel — what to remember, and what a person is waiting on. |
+| `crates/pirate/src/state.rs` | When to ask — once at start, and then when you open the panel — what to remember, and what a person is waiting on. |
 | `crates/pirate/src/claude.rs` | The two JSON shapes: the credentials file and the usage endpoint. |
 | `crates/pirate/src/history.rs` | What to have counted out of the transcripts, and what the totals mean. |
 | `crates/pirate/src/view.rs` | The chip and the panel, as a tree Crook paints. |

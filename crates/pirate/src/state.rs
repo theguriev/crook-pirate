@@ -1,6 +1,6 @@
 //! When to ask, what to remember, and what a person is waiting on.
 //!
-//! # Nothing is asked until somebody opens the panel
+//! # Asked once on a build, and after that only when the panel opens
 //!
 //! There is no background poll. The endpoint behind the number has a budget
 //! small enough that a handful of requests spends it, and it is shared with
@@ -11,11 +11,15 @@
 //! chip exists to answer. The plugin used to do exactly that, and the number
 //! it drew was "asked too often" often enough to be the only thing it said.
 //!
-//! So opening the panel is the only thing that asks — see [`Pirate::run`] —
-//! and a build asks for nothing at all, which matters because a build happens
-//! every time the host is restarted or a grant is answered. The number on the
-//! chip between two openings is the one the last opening got, and it is
-//! exactly as old as it looks.
+//! What it does instead is ask exactly twice over: once when it is built —
+//! see [`Pirate::build`] — so that the chip says a number from the moment the
+//! header is drawn rather than an en dash until somebody thinks to click it,
+//! and then once per opening of the panel — see [`Pirate::run`]. A build
+//! happens when the host starts, when the plugin is switched back on and when
+//! a grant is answered, none of which happens once a minute, and the last of
+//! which is exactly when the first request is worth making again. The number
+//! on the chip between two openings is the one the last of those got, and it
+//! is exactly as old as it looks.
 //!
 //! # A timer is asked for only when there is something to do
 //!
@@ -246,7 +250,8 @@ impl Pirate {
         Self::default()
     }
 
-    /// Registers the chip and the two actions, and asks for nothing.
+    /// Registers the chip and the two actions, and asks for the first
+    /// reading.
     pub fn build(&mut self) {
         sys::contribute(crate::HEADER_SLOT, "chip", 0);
         sys::register_action("panel", Some("Show the usage panel"));
@@ -254,17 +259,19 @@ impl Pirate {
         // runs, and nobody goes looking for it in a palette.
         sys::register_action("dismiss", None);
 
-        // And nothing else. A build is not a person asking, and the host
-        // builds a plugin again whenever it is switched back on, whenever a
-        // grant is answered, and every time it is started — so a build that
-        // asked would be a plugin that spends a request on every restart.
+        // One request, and quietly: a build is not a person asking, so the
+        // mouth does not move for it — but a chip that said nothing until it
+        // was clicked was a chip that, for most of a day, said nothing. See
+        // the module note for why one request here is not the poll this
+        // plugin gave up.
+        self.ask();
         self.arm();
     }
 
     /// Runs one of the actions registered above.
     ///
-    /// Opening the panel is the whole of when this plugin asks Anthropic
-    /// anything. See the module note.
+    /// Opening the panel is, after the build, the only time this plugin asks
+    /// Anthropic anything. See the module note.
     pub fn run(&mut self, action: &str) {
         match action {
             "panel" => {
@@ -451,12 +458,12 @@ impl Pirate {
         self.settle(Some(Problem::Unreachable));
     }
 
-    /// Starts a cycle, unless one is already running.
+    /// A person asked: starts a cycle, unless one is already running, and
+    /// moves the mouth either way.
     ///
-    /// Every cycle is one a person asked for, which is why the mouth always
-    /// moves. A second click while a refresh is in flight starts no second
-    /// request — but it does keep the animation, because somebody is still
-    /// waiting on an answer that was already coming.
+    /// A second click while a refresh is in flight starts no second request —
+    /// but it does keep the animation, because somebody is still waiting on
+    /// an answer that was already coming.
     fn refresh(&mut self) {
         // A click during a back-off is not a reason to break it. The endpoint
         // said to ask later and it meant later; asking because somebody opened
@@ -473,7 +480,16 @@ impl Pirate {
         // extends the animation even though it starts no second request.
         self.chomping_until = sys::now() + CHOMP_FOR;
 
-        if self.is_waiting() {
+        self.ask();
+    }
+
+    /// Starts a cycle, unless one is already running or the endpoint said
+    /// not to.
+    ///
+    /// Nothing about the mouth: this is the request and only the request,
+    /// which is what a build wants — a number, with nobody waiting on it.
+    fn ask(&mut self) {
+        if self.is_waiting() || sys::now() < self.not_before {
             return;
         }
 
