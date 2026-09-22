@@ -6,6 +6,22 @@ by `ci.yml`, through `script/release-notes`.
 Sections start at the first release cut that way; the ones before it were
 described on their release pages and are listed here by tag.
 
+## v0.3.1
+
+[compare changes](https://github.com/theguriev/crook-pirate/compare/v0.3.0...v0.3.1)
+
+### Features
+
+- Carry a face and pictures inside the module ([#6](https://github.com/theguriev/crook-pirate/pull/6))
+
+### CI
+
+- Cut releases with a script and write the notes with changelogen ([#5](https://github.com/theguriev/crook-pirate/pull/5))
+
+### ❤️ Contributors
+
+- Eugen Guriev ([@theguriev](https://github.com/theguriev))
+
 ## Before the changelog
 
 - [v0.3.0](https://github.com/theguriev/crook-pirate/releases/tag/v0.3.0) — 2026-09-11
