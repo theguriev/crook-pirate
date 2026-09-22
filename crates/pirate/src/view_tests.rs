@@ -842,3 +842,20 @@ fn a_cut_does_not_leave_a_separator_dangling_before_the_ellipsis() {
     assert_eq!(elided("a name that is long", 8), "a name\u{2026}");
     assert_eq!(elided("short", 10), "short");
 }
+
+#[test]
+fn a_figure_is_rounded_before_its_unit_is_chosen() {
+    // Away from the boundaries: one decimal below ten, none above.
+    assert_eq!(compact(999), "999");
+    assert_eq!(compact(1_000), "1.0k");
+    assert_eq!(compact(9_400_000), "9.4M");
+    assert_eq!(compact(12_000_000), "12M");
+    // Just under a thousand of a unit is one of the next, not a thousand.
+    assert_eq!(compact(999_500), "1.0M");
+    assert_eq!(compact(999_999), "1.0M");
+    assert_eq!(compact(999_600_000), "1.0B");
+    // Just under ten is printed as ten, which takes no decimal.
+    assert_eq!(compact(9_960), "10k");
+    assert_eq!(compact(9_960_000), "10M");
+    assert_eq!(compact(9_940), "9.9k");
+}
