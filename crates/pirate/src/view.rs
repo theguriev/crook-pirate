@@ -576,26 +576,29 @@ fn elided(label: &str, chars: usize) -> String {
 
 /// A number a person reads at a glance rather than counts the digits of.
 fn compact(tokens: u64) -> String {
-    const THOUSAND: f64 = 1_000.;
-    let tokens = tokens as f64;
+    const SUFFIXES: [&str; 4] = ["", "k", "M", "B"];
+    let mut scaled = tokens as f64;
+    let mut unit = 0;
 
-    for (limit, suffix) in [
-        (THOUSAND.powi(3), "B"),
-        (THOUSAND.powi(2), "M"),
-        (THOUSAND, "k"),
-    ] {
-        if tokens >= limit {
-            let scaled = tokens / limit;
-            // One decimal below ten, none above it: 9.4M, then 12M.
-            return if scaled < 10. {
-                format!("{scaled:.1}{suffix}")
-            } else {
-                format!("{scaled:.0}{suffix}")
-            };
-        }
+    // The unit is settled by the number as it will be printed, not as it is:
+    // 999,999 rounds to a thousand thousands, which is 1.0M and not 1000k.
+    while unit + 1 < SUFFIXES.len() && scaled.round() >= 1_000. {
+        scaled /= 1_000.;
+        unit += 1;
+    }
+    let suffix = SUFFIXES[unit];
+    if unit == 0 {
+        return format!("{scaled:.0}");
     }
 
-    format!("{tokens:.0}")
+    // One decimal below ten, none above it: 9.4M, then 12M — and 9.96M is
+    // above it, since it is printed as ten.
+    let tenths = (scaled * 10.).round();
+    if tenths < 100. {
+        format!("{:.1}{suffix}", tenths / 10.)
+    } else {
+        format!("{scaled:.0}{suffix}")
+    }
 }
 
 /// A count with its thousands grouped, for the figures that are counted rather
