@@ -55,6 +55,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Every commit and every tag: the notes below are read out of
+          # CHANGELOG.md, and when a tag was made by hand and has no section
+          # there, script/release-notes walks back to the previous tag to write
+          # one — which a shallow checkout has nothing to walk.
+          fetch-depth: 0
       - name: Install the toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -68,9 +74,17 @@ jobs:
           cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
           sha256sum plugin.wasm > plugin.wasm.sha256
 
+      # What the release page says, from CHANGELOG.md. script/release writes
+      # the `## vX.Y.Z` section there in the same commit the tag sits on, so
+      # the file in the repository and the page cannot disagree; a tag cut by
+      # hand has no section, and then the same generator runs here and the
+      # notes say that is what happened.
+      - name: The release notes
+        run: ./script/release-notes "$GITHUB_REF_NAME" > changes.md
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             plugin.wasm
             plugin.wasm.sha256
-          generate_release_notes: true
+          body_path: changes.md

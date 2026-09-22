@@ -128,6 +128,30 @@ number, a meter, a note — and Crook decides what that looks like in whatever t
 force. The pirate is Crook's own artwork, asked for by name; the plugin only says which frame
 of the bite to draw, which is how a sandboxed plugin animates something it cannot paint.
 
+## Releasing
+
+A release is a tag, and the tag is cut by a script:
+
+```sh
+./script/release 0.3.1 --push
+```
+
+It sets the version in `Cargo.toml`, writes the `## v0.3.1` section of `CHANGELOG.md`
+from the commit titles since the previous tag with
+[changelogen](https://github.com/unjs/changelogen), commits both as `chore(release):
+v0.3.1`, tags it and pushes. `ci.yml` builds `plugin.wasm` from that tag and puts it on a
+release page whose notes are that same section — written once, not once for the file and
+again for the page. `--dry-run` prints the section and stops; `--push` is what starts the
+build.
+
+Which makes commit titles the release notes, so they are [Conventional
+Commits](https://www.conventionalcommits.org/en/v1.0.0/) — `feat(panel): …`, `fix: …`, the
+types listed under `types` in `changelog.config.json`. A title in any other shape is not an
+error to the generator, it is dropped without a word, so it is refused where it is still
+easy to fix: `git config core.hooksPath script/hooks` installs the hook, and `commits.yml`
+runs the same check on every pull request. The history before all this predates the convention,
+so the first release over it needs `--allow-untyped`, which says the omission is understood.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
