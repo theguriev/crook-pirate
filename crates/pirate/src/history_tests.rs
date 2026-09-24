@@ -138,26 +138,49 @@ fn an_hour_older_than_the_first_column_counts_without_a_column_to_stand_in() {
 
 #[test]
 fn a_project_is_the_last_part_of_its_path_and_the_branch_most_of_it_was_on() {
+    // Two projects, and the heavier branch sorts first in one and last in the
+    // other: with one, a branch picked by its *name* — the larger or the
+    // smaller — came out right by the alphabet alone.
     let week = only(
         BY_PROJECT,
         vec![
             tallied(
                 &["assistant", "/home/a/Work/crook/", "pirate"],
+                [0., 10., 0., 0.],
+                1,
+            ),
+            tallied(
+                &["assistant", "/home/a/Work/crook", "main"],
                 [0., 30., 0., 0.],
                 2,
             ),
             tallied(
-                &["assistant", "/home/a/Work/crook", "main"],
-                [0., 10., 0., 0.],
+                &["assistant", "/home/a/Work/site", "alpha"],
+                [0., 5., 0., 0.],
+                1,
+            ),
+            tallied(
+                &["assistant", "/home/a/Work/site", "zeta"],
+                [0., 15., 0., 0.],
                 1,
             ),
         ],
     );
 
-    assert_eq!(week.projects.len(), 1, "{:?}", week.projects);
-    assert_eq!(week.projects[0].name, "crook");
-    assert_eq!(week.projects[0].branch.as_deref(), Some("pirate"));
-    assert_eq!(week.projects[0].tokens, 40);
+    assert_eq!(week.projects.len(), 2, "{:?}", week.projects);
+    let crook = week
+        .projects
+        .iter()
+        .find(|project| project.name == "crook")
+        .expect("the trailing slash is the same project");
+    assert_eq!(crook.branch.as_deref(), Some("main"));
+    assert_eq!(crook.tokens, 40);
+    let site = week
+        .projects
+        .iter()
+        .find(|project| project.name == "site")
+        .expect("a second project");
+    assert_eq!(site.branch.as_deref(), Some("zeta"));
 }
 
 #[test]
