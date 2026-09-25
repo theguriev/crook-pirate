@@ -340,6 +340,52 @@ fn the_panel_draws_a_bar_for_every_limit_claude_reports() {
 }
 
 #[test]
+fn a_window_whose_reset_has_come_says_so_and_mutes_the_old_reading() {
+    // The clock the stub keeps is 2026-09-04T18:00Z: the session window has
+    // half an hour left, the week two days.
+    let mut pirate = answered(
+        200,
+        br#"{"five_hour":{"utilization":97.0,"resets_at":"2026-09-04T18:30:00Z"},
+             "seven_day":{"utilization":96.0,"resets_at":"2026-09-06T18:00:00Z"}}"#,
+    );
+    pirate.run("panel");
+    let before = texts(&chip(&pirate));
+    assert!(
+        before.iter().any(|text| text == "resets in 30m"),
+        "{before:?}"
+    );
+
+    // The panel left open past the reset. Nothing reads the endpoint again
+    // until it is opened again, so the reading is the old window's.
+    stub::advance(31 * 60_000);
+    let chip = chip(&pirate);
+    let after = texts(&chip);
+    assert!(
+        !after.iter().any(|text| text.starts_with("resets in now")),
+        "{after:?}"
+    );
+    assert!(after.iter().any(|text| text == "has reset"), "{after:?}");
+    assert!(
+        after.iter().any(|text| text == "resets in 1d 23h"),
+        "{after:?}"
+    );
+    assert_eq!(
+        meters(&chip),
+        vec![(0.97, Tone::Muted), (0.96, Tone::Danger)],
+        "the reset window kept its warning colour"
+    );
+    // And the pill in the header, which is the session's percentage too.
+    let Node::Anchored { content, .. } = &chip else {
+        panic!("the chip is anchored, {chip:?}");
+    };
+    let pill = styled(content);
+    assert!(
+        pill.contains(&(String::from("97%"), Size::Small, Tone::Muted)),
+        "{pill:?}"
+    );
+}
+
+#[test]
 fn a_panel_with_no_reading_says_why_rather_than_drawing_empty_bars() {
     let mut pirate = answered(401, b"");
     pirate.run("panel");

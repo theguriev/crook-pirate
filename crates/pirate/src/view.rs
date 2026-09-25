@@ -109,15 +109,30 @@ fn label(pirate: &Pirate) -> String {
 /// muted grey the unread chip uses the moment it is not.
 ///
 /// A percentage the last cycle failed to refresh is still the best answer
-/// available, and it has to be visibly not a fresh one.
+/// available, and it has to be visibly not a fresh one. So is a session whose
+/// window has reset since it was read — see [`has_reset`].
 fn label_tone(pirate: &Pirate) -> Tone {
     if pirate.problem().is_some() {
         return Tone::Muted;
     }
     match pirate.usable_reading() {
+        Some(reading) if has_reset(reading.session, crate::sys::now()) => Tone::Muted,
         Some(reading) => band(reading.session.percent),
         None => Tone::Success,
     }
+}
+
+/// Whether a limit's window has reset since it was read.
+///
+/// The panel redraws on the clock and reads the endpoint only when it is
+/// opened, so a reading can outlive its window: the panel left open, a
+/// refresh that failed or was told to wait. Its percentage is then the old
+/// window's, and was drawn in the old window's warning colour beside
+/// "resets in now", for a window that is empty again.
+fn has_reset(limit: Limit, now: i64) -> bool {
+    limit
+        .resets_at
+        .is_some_and(|resets_at| resets_at - now < 1_000)
 }
 
 /// What the mark is painted in.
@@ -256,9 +271,12 @@ fn limits(reading: &Reading, now: i64) -> Vec<Node> {
 /// rather than under the bar because it qualifies the name — "Session, for
 /// another three hours" — and a caption separated from its noun by a meter
 /// read as a caption for the meter.
+///
+/// A window that [`has_reset`] says so, and its reading is muted.
 fn limit(name: &str, limit: Limit, now: i64) -> Vec<Node> {
     let percent = limit.percent.clamp(0., 100.);
-    let tone = band(percent);
+    let over = has_reset(limit, now);
+    let tone = if over { Tone::Muted } else { band(percent) };
 
     let mut row = vec![Node::Text {
         text: String::from(name),
@@ -268,7 +286,10 @@ fn limit(name: &str, limit: Limit, now: i64) -> Vec<Node> {
     if let Some(resets_at) = limit.resets_at {
         row.push(Node::Gap(Gap::Medium));
         row.push(Node::Text {
-            text: format!("resets in {}", format_countdown(resets_at - now)),
+            text: match over {
+                true => String::from("has reset"),
+                false => format!("resets in {}", format_countdown(resets_at - now)),
+            },
             size: Size::Small,
             tone: Tone::Muted,
         });
