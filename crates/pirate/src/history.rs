@@ -90,7 +90,7 @@ const BRANCH: usize = 2;
 /// be a bug with a straight face; everywhere else it costs nothing, because a
 /// turn nobody made spent no tokens.
 const BY_MODEL: usize = 0;
-const BY_HOUR: usize = 1;
+const BY_TIME: usize = 1;
 const BY_PROJECT: usize = 2;
 const BY_SESSION: usize = 3;
 
@@ -102,12 +102,20 @@ const TOKENS: [&str; 4] = [
     "message.usage.cache_read_input_tokens",
 ];
 
-/// How much of a timestamp is its hour: `2026-09-04T18`.
+/// How much of a timestamp is its stretch of ten minutes: `2026-09-04T18:4`.
 ///
-/// The hour rather than the day, because which day an hour belongs to is a
-/// question about time zones and the host has no idea what one is. Seven days
-/// of hours is a hundred and sixty-eight rows, which is nothing.
-const HOUR: u32 = 13;
+/// Shorter than the day, because which day a stretch belongs to is a question
+/// about time zones and the host has no idea what one is. Shorter than the
+/// hour, because not every zone is a whole number of hours away: in India,
+/// Adelaide, Tehran and Newfoundland local midnight is half past a UTC hour,
+/// and an hour counted whole on the day it started put the first half hour of
+/// every day in yesterday's column. Ten minutes is exact for all of those;
+/// the three zones a quarter off the hour — Nepal, the Chatham Islands, Eucla
+/// — can still put five minutes on the wrong side of midnight. Seven days of
+/// ten minutes is a thousand and eight rows, which is still nothing, where
+/// seven days of minutes could be enough to crowd the megabyte an answer is
+/// allowed to be.
+const STRETCH: u32 = 15;
 
 /// What one model was used for over the window.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -274,7 +282,7 @@ impl Reading {
                 },
                 Key {
                     field: String::from(subject),
-                    prefix: (subject == "timestamp").then_some(HOUR),
+                    prefix: (subject == "timestamp").then_some(STRETCH),
                 },
             ];
             if let Some(third) = third {
@@ -350,10 +358,10 @@ impl Reading {
         });
 
         let mut by_day: HashMap<i64, u64> = HashMap::new();
-        for row in rows(&tables, BY_HOUR) {
-            // An hour, read back as an instant so that the machine's own
-            // offset decides which day it belongs to.
-            let Some(at) = parse_rfc3339(&format!("{}:00:00Z", text(&row.key, SUBJECT))) else {
+        for row in rows(&tables, BY_TIME) {
+            // A stretch, read back as the instant it starts so that the
+            // machine's own offset decides which day it belongs to.
+            let Some(at) = parse_rfc3339(&format!("{}0:00Z", text(&row.key, SUBJECT))) else {
                 continue;
             };
             let day = day_of(at);

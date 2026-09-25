@@ -73,10 +73,10 @@ fn an_hour_belongs_to_the_day_the_person_lived() {
     // and 12:00 UTC on the 3rd is the afternoon of the 3rd. UTC says one day;
     // the person who worked those hours lived two.
     let week = only(
-        BY_HOUR,
+        BY_TIME,
         vec![
-            tallied(&["assistant", "2026-09-03T22"], [0., 10., 0., 0.], 1),
-            tallied(&["assistant", "2026-09-03T12"], [0., 20., 0., 0.], 1),
+            tallied(&["assistant", "2026-09-03T22:0"], [0., 10., 0., 0.], 1),
+            tallied(&["assistant", "2026-09-03T12:0"], [0., 20., 0., 0.], 1),
         ],
     );
 
@@ -103,9 +103,9 @@ fn every_day_of_the_window_is_a_column_even_the_quiet_ones() {
     // A gap in a chart has to be a column of no height rather than a missing
     // one, or the chart says the week was shorter than it was.
     let week = only(
-        BY_HOUR,
+        BY_TIME,
         vec![tallied(
-            &["assistant", "2026-09-04T12"],
+            &["assistant", "2026-09-04T12:0"],
             [0., 10., 0., 0.],
             1,
         )],
@@ -121,9 +121,9 @@ fn an_hour_older_than_the_first_column_counts_without_a_column_to_stand_in() {
     // which are not the same thing: the hours between them are real turns with
     // nowhere to be drawn.
     let week = only(
-        BY_HOUR,
+        BY_TIME,
         vec![tallied(
-            &["assistant", "2026-08-28T12"],
+            &["assistant", "2026-08-28T12:0"],
             [0., 10., 0., 0.],
             1,
         )],
@@ -287,7 +287,7 @@ fn what_it_asks_the_host_for_is_one_walk_and_four_ways_of_looking_at_it() {
     assert_eq!(tables[BY_SESSION].by[SUBJECT].field, "sessionId");
     // The hour, which is how a plugin asks for a day without the host knowing
     // what a time zone is.
-    assert_eq!(tables[BY_HOUR].by[SUBJECT].prefix, Some(HOUR));
+    assert_eq!(tables[BY_TIME].by[SUBJECT].prefix, Some(STRETCH));
     assert_eq!(distinct_by.len(), 2, "a turn is a message and a request");
     assert_eq!(
         at_least.len(),
@@ -295,4 +295,29 @@ fn what_it_asks_the_host_for_is_one_walk_and_four_ways_of_looking_at_it() {
         "the window has to be a line-by-line floor"
     );
     assert_eq!(containing, "\"usage\"");
+}
+
+#[test]
+fn the_first_half_hour_after_midnight_in_india_is_the_new_day() {
+    // UTC+5:30. Now is 20:00 UTC on the 4th, half past one on the 5th in
+    // India; a turn at 18:45 UTC was a quarter past midnight on the 5th. It
+    // was counted with the whole UTC hour it fell in, 18:00, which is half
+    // past eleven on the 4th, and today's column stayed empty.
+    stub::forget();
+    stub::set_now(NOW + 2 * 3_600_000);
+    stub::set_timezone(330);
+    let mut reading = Reading::start();
+    let asked = stub::taken();
+    let Some((_, Request::Tally { tables, .. })) = asked.requests.first() else {
+        panic!("the reading asked for no tally: {:?}", asked.requests);
+    };
+    // The key the host makes of the turn's timestamp, cut where it was asked.
+    let prefix = tables[BY_TIME].by[SUBJECT].prefix.expect("the time is cut") as usize;
+    let key = &"2026-09-04T18:45:12.345Z"[..prefix];
+    let mut answer = vec![Vec::new(); 4];
+    answer[BY_TIME] = vec![tallied(&["assistant", key], [0., 10., 0., 0.], 1)];
+
+    let week = reading.take(answer);
+
+    assert_eq!(week.days[DAYS as usize - 1], 10, "{:?}", week.days);
 }

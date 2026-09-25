@@ -154,8 +154,8 @@ fn tables() -> Vec<Vec<Tallied>> {
             ),
         ],
         vec![
-            tallied(&["assistant", "2026-08-30T12"], [0., 0., 0., 1000.], 1),
-            tallied(&["assistant", "2026-09-04T12"], [0., 0., 0., 250.], 1),
+            tallied(&["assistant", "2026-08-30T12:0"], [0., 0., 0., 1000.], 1),
+            tallied(&["assistant", "2026-09-04T12:0"], [0., 0., 0., 250.], 1),
         ],
         vec![
             tallied(

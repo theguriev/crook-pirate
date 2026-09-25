@@ -92,7 +92,7 @@ fn tables() -> Vec<Vec<Tallied>> {
         .iter()
         .map(|(day, tokens)| {
             tallied(
-                &["assistant", &format!("{day}T12")],
+                &["assistant", &format!("{day}T12:0")],
                 [0., 0., 0., *tokens],
                 1,
             )
