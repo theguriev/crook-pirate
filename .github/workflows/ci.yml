@@ -27,16 +27,20 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # Everything but `sys.rs` builds for the host, which is what makes the
       # whole plugin testable without a terminal to install it into.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
+      # `--locked`, as the registry builds it: without it cargo quietly
+      # rewrites a Cargo.lock that no longer matches Cargo.toml, this passes,
+      # and the first build to refuse the stale file is the registry's, on
+      # the commit already named in its pull request.
       - name: Build the plugin
         run: |
-          cargo build --release --target wasm32-unknown-unknown
+          cargo build --release --locked --target wasm32-unknown-unknown
           cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
           ls -l plugin.wasm
 
@@ -70,7 +74,7 @@ jobs:
       # source and nothing else has touched.
       - name: Build the plugin
         run: |
-          cargo build --release --target wasm32-unknown-unknown
+          cargo build --release --locked --target wasm32-unknown-unknown
           cp target/wasm32-unknown-unknown/release/pirate.wasm plugin.wasm
           sha256sum plugin.wasm > plugin.wasm.sha256
 
